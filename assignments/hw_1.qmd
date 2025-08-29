@@ -1,0 +1,50 @@
+---
+title: "DATA 624 Homework 1"
+format: html
+author: "Kevin Havis"
+---
+
+```{r}
+library(tidyverse)
+library(fpp3)
+# library(ggplot2)
+```
+
+# Homework 1
+
+
+## Exercise 2.1
+
+```{r}
+# Load timeseries
+bricks <- tsibbledata::aus_production['Bricks']
+lynx <- tsibbledata::pelt['Lynx']
+close <- tsibbledata::gafa_stock['Close']
+Demand <- tsibbledata::vic_elec['Demand']
+```
+
+```{r}
+?
+```
+
+
+
+
+
+
+## Exercise 2.2
+
+
+
+## Exercise 2.3
+
+
+
+## Exercise 2.4
+
+
+## Exercise 2.5
+
+
+## Exercise 2.8
+
