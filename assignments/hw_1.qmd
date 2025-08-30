@@ -7,7 +7,9 @@ author: "Kevin Havis"
 ```{r}
 library(tidyverse)
 library(fpp3)
-# library(ggplot2)
+library(tsibble)
+library(ggplot2)
+library(tsibbledata)
 ```
 
 # Homework 1
@@ -16,31 +18,72 @@ library(fpp3)
 ## Exercise 2.1
 
 ```{r}
-# Load timeseries
-bricks <- tsibbledata::aus_production['Bricks']
-lynx <- tsibbledata::pelt['Lynx']
-close <- tsibbledata::gafa_stock['Close']
-Demand <- tsibbledata::vic_elec['Demand']
+# https://otexts.com/fpp3/graphics-exercises.html
+
+?aus_production # Half hourly
+?lynx # Annual
+?gafa_stock # trading days
+?vic_elec # Half hourly
 ```
 
 ```{r}
-?
+autoplot(aus_production, Bricks)
+autoplot(pelt, Lynx)
+autoplot(gafa_stock, Close)
+autoplot(vic_elec, Demand)
 ```
-
-
-
-
-
 
 ## Exercise 2.2
 
+```{r}
+# I can groupby and take the max to find top close days for each stock
+top_stock_days <- gafa_stock |> 
+  group_by(Symbol) |> 
+  slice_max(Close, n=1) # Gets the max for each element I've grouped (Symbol)
 
+head(top_stock_days)
+```
 
 ## Exercise 2.3
 
+```{r}
+# Read data from URL
+tute1 <- read_csv("https://otexts.com/fpp3/extrafiles/tute1.csv")
+head(tute1)
+```
+```{r}
+# Convert to tsibble
+mytimeseries <- tute1 |>
+  mutate(Quarter = yearquarter(Quarter)) |> # Formats date to yearquarter type
+  as_tsibble(index = Quarter) # Converts to tsibble
+head(mytimeseries)
+```
 
+```{r}
+mytimeseries |>
+  pivot_longer(-Quarter) |> # Viz friendly format
+  ggplot(aes(x = Quarter, y = value, colour = name)) +
+  geom_line() +
+  facet_grid(name ~ ., scales = "free_y") # Sets a facet for each column
+```
 
 ## Exercise 2.4
+
+```{r}
+install.packages("USgas")
+library(USgas)
+```
+
+```{r}
+head(usgas)
+```
+
+
+```{r}
+gas_time <- usgas |> 
+  mutate()
+  as_tsibble(usgas, key=)
+```
 
 
 ## Exercise 2.5
