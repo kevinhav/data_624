@@ -27,6 +27,7 @@ library(tsibbledata)
 ```
 
 ```{r}
+# Autoplot each data by the specified feature
 autoplot(aus_production, Bricks)
 autoplot(pelt, Lynx)
 autoplot(gafa_stock, Close)
@@ -60,6 +61,7 @@ head(mytimeseries)
 ```
 
 ```{r}
+# Plot the timeseries
 mytimeseries |>
   pivot_longer(-Quarter) |> # Viz friendly format
   ggplot(aes(x = Quarter, y = value, colour = name)) +
@@ -70,6 +72,7 @@ mytimeseries |>
 ## Exercise 2.4
 
 ```{r}
+# Get the US Gas dataset
 install.packages("USgas")
 library(USgas)
 ```
@@ -80,14 +83,87 @@ head(usgas)
 
 
 ```{r}
-gas_time <- usgas |> 
-  mutate()
-  as_tsibble(usgas, key=)
+# Plot the New England states
+ne_gas <- usgas |> 
+  mutate(Year = year(date)) |> 
+  group_by(Year, state) |>
+  summarize(y_sum = sum(y)) |> 
+  filter(state %in% c("Maine", "Vermont", "New Hampshire", "Massachusetts", "Connecticut","Rhode Island")) |> 
+  as_tsibble(index=Year, key=state)
+
+head(ne_gas)
 ```
 
+```{r}
+# Plot the data
+ne_gas |>
+  ggplot(aes(x = Year, y = y_sum, colour = state)) +
+  geom_line() +
+  facet_grid(state ~ ., scales = "free_y")
+```
 
 ## Exercise 2.5
 
+```{r}
+# Load the tourism data from the package
+# Our reference point
+head(tsibble::tourism)
+```
 
-## Exercise 2.8
+
+```{r}
+# Download the example tourism file
+library(readxl)
+my_tourism <- read_excel("~/projects/data_624/assignments/tourism.xlsx")
+head(my_tourism)
+```
+
+```{r}
+# Match downloaded tourism data to package data
+# Just need to convert the char Quarter to yearquarter
+my_tourism <- my_tourism |>
+  mutate(Quarter = yearquarter(Quarter))
+
+head(my_tourism)
+```
+
+```{r}
+# Find the most amount of flights by Purpose and Region
+my_tourism |>
+  group_by(Region, Purpose) |> 
+  summarize(total_trips = sum(Trips)) |> 
+  arrange(desc(total_trips))
+
+# It's Sydney!
+```
+
+```{r}
+# Group by just state and trips
+my_tourism |> 
+  group_by(State) |> 
+  summarize(total_trips = sum(Trips)) |> 
+  arrange(desc(total_trips))
+```
+
+## Exercise 2.6
+
+```{r}
+# Get the aus_arrival data from the package
+arrival_data <- fpp3::aus_arrivals
+```
+
+```{r}
+# Try autoplot
+autoplot(arrival_data)
+```
+```{r}
+# Try seasons
+library(feasts)
+gg_season(arrival_data)
+```
+
+```{r}
+# Try subseries
+gg_subseries(arrival_data)
+```
 
