@@ -147,6 +147,14 @@ my_tourism |>
 
 ## Exercise 2.6
 
+Observing the various plots below of our `aus_arrivals` data, there are a few interesting observations we can make.
+
+1. *Seasonality*: We can see decrease in travel to Australia from the US and UK during the middle months, the inverse for New Zealand
+2. *Trend*: Flights to Australia have generally increased overtime, with the exception of those from Japan which sharply falls after early 1990s
+
+For seasonality plots, the `gg_season` plot is well suited for general observations, but I prefer the detail and addition of the mean we get "for free" from the `gg_subseries` plot.
+
+
 ```{r}
 # Get the aus_arrival data from the package
 arrival_data <- fpp3::aus_arrivals
@@ -166,4 +174,104 @@ gg_season(arrival_data)
 # Try subseries
 gg_subseries(arrival_data)
 ```
+
+## Exercise 2.7
+
+Considering the Australian retail dataset, the visualizations help us easily identify patterns of trend, seasonality, and cycles.
+
+We can see that the autocorrelation rate is quite high (and positive) for Turnover in all the the graphs. This tells us that the Turnover of the prior interval is a good indicator of future intervals, which we would describe as having high autocorrelation.
+
+In addition, we can see the seasonality, especially in the `gg_subseries` plot, where the mean is indicated by the blue line. We can see Turnover remains relatively flat through the second and third quarter, with higher Turnover rates near the beginning and end of years.
+
+The trend, or the long-term direction of the series over time, is positive, as we can see in the rising Turnover rates, especially from 2000 and onward.
+
+As far as cycles, or smaller repetitions within seasons, the visualizations available do not show anything convincing, however "zooming in" on a smaller time interval may show things like weekends having some impact.
+
+```{r}
+# Pick a series to plot
+set.seed(42)
+
+myseries <- aus_retail |>
+  filter(`Series ID` == sample(aus_retail$`Series ID`,1))
+```
+
+```{r}
+autoplot(myseries)
+```
+
+```{r}
+gg_season(myseries)
+```
+
+```{r}
+gg_subseries(myseries)
+```
+
+```{r}
+gg_lag(myseries)
+```
+
+```{r}
+myseries |> ACF(Turnover) |> autoplot()
+```
+
+## Exercise 2.8
+
+Use the following graphics functions: autoplot(), gg_season(), gg_subseries(), gg_lag(), ACF() and explore features from the following time series: “Total Private” Employed from us_employment, Bricks from aus_production, Hare from pelt, “H02” Cost from PBS, and Barrels from us_gasoline.
+
+```{r}
+plot_series <- function(data, value_col, period = NULL) {
+  print(data |> autoplot(.vars = {{ value_col }}) + labs(title = "Time Series Plot"))
+  
+  tryCatch({
+    if (is.null(period)) {
+      print(data |> gg_season({{ value_col }}) + labs(title = "Seasonal Plot"))
+    } else {
+      print(data |> gg_season({{ value_col }}, period = period) + labs(title = "Seasonal Plot"))
+    }
+  }, error = function(e) {
+    cat("Skipping seasonal plot:", e$message, "\n")
+  })
+  
+  tryCatch({
+    print(data |> gg_subseries({{ value_col }}) + labs(title = "Seasonal Subseries Plot"))
+  }, error = function(e) {
+    cat("Skipping subseries plot:", e$message, "\n")
+  })
+  
+  print(data |> gg_lag({{ value_col }}) + labs(title = "Lag Plot"))
+  print(data |> ACF({{ value_col }}) |> autoplot() + labs(title = "Autocorrelation Function"))
+}
+```
+
+```{r}
+# US Employement
+
+set.seed(42)
+us_employment <- fpp3::us_employment |> 
+  filter(`Series_ID` == sample(fpp3::us_employment$`Series_ID`, 1)) |> 
+  drop_na(Employed)
+
+# Then plot with ACF column specified
+plot_series(us_employment, Employed)
+```
+
+```{r}
+plot_series(aus_production, Bricks)
+```
+
+```{r}
+plot_series(tsibbledata::pelt, Hare, period = '1y')
+```
+
+```{r}
+# PBS
+pbs <- tsibbledata::PBS |> 
+  filter(ATC2=="H02") |> 
+  group_by(Month) |> 
+  summarize(total_cost = sum(Cost))
+  
+plot_series(data=pbs, Cost)
+```
+
 

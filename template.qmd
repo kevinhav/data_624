@@ -1,0 +1,64 @@
+---
+title: "Assignment Title"
+subtitle: "Course Name - Assignment #"
+author: "Your Name"
+date: today
+date-format: "MMMM D, YYYY"
+format: 
+  html:
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    code-fold: false
+    theme: cosmo
+    embed-resources: true
+  pdf:
+    toc: true
+    number-sections: true
+    colorlinks: true
+execute:
+  warning: false
+  message: false
+  echo: true
+  cache: false
+---
+
+```{r}
+#| label: setup
+#| include: false
+
+# Load required libraries
+library(tidyverse)
+library(here)
+
+# Set default chunk options
+knitr::opts_chunk$set(
+  fig.width = 8,
+  fig.height = 6,
+  fig.align = "center",
+  out.width = "80%"
+)
+
+# Set ggplot theme
+theme_set(theme_minimal())
+```
+
+# Introduction
+
+# Analysis
+
+```{r}
+# Your analysis code here
+```
+
+# Results
+
+# Conclusion
+
+# Appendix
+
+```{r}
+#| label: session-info
+#| echo: false
+sessionInfo()
+```
