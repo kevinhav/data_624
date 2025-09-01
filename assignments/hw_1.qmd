@@ -239,39 +239,92 @@ plot_series <- function(data, value_col, period = NULL) {
     cat("Skipping subseries plot:", e$message, "\n")
   })
   
+  tryCatch({
   print(data |> gg_lag({{ value_col }}) + labs(title = "Lag Plot"))
+  }, error = function(e) {
+    cat("Skipipng gglag plot:", e$message, "\n")
+  })
+  
   print(data |> ACF({{ value_col }}) |> autoplot() + labs(title = "Autocorrelation Function"))
 }
 ```
+
+### United States Employement Series
+
+US private sector employment has been trending up through all of dates available in the data. We can see slightly upticks in employment during periods of peak seasonal work through the summer months. The data is very highly autocorrelated, averaging nearly 90% across all observed years.
+
+We can see brief periods of downwards employment trends periodically through the larger timeseries (besides the seasonality); we would describe this as cycles of unemployment that likely follow recessions typical of most healthy economies.
+
+One such downturn aligns with the recession and housing market crash of 2008, which is clear in the data.
+
+Overall, the graphs show a positive and relatively stable growth of employment in the United States private sector.
+
 
 ```{r}
 # US Employement
 
 set.seed(42)
 us_employment <- fpp3::us_employment |> 
-  filter(`Series_ID` == sample(fpp3::us_employment$`Series_ID`, 1)) |> 
+  filter(Title == "Total Private") |> 
   drop_na(Employed)
 
 # Then plot with ACF column specified
 plot_series(us_employment, Employed)
 ```
 
+### Australian Bricks Production Series
+
+Production of bricks in the Australian retail market is varied by both cycles and seasons. We can see from the timeseries line graph that there's no unidirectional trend; the market appears to have peaked in the early 1980s before sharply crashing, initiating a downward trend that continues to the edges of our data.
+
+Australia's spring season occurs in Q3, which is where we see an uptick in brick production; this is intuitive as we would expect peak construction season to be in the summer months, and bricks would be a natural direct material.
+
+Brick production is still quite positively autocorrelated, but more noise is introduced when increasing the lag parameter.
+
+Overall, the graphs indicate to me that the brick production market is relatively saturated at this point, especially after a boom in the 1980s, and is currently trending towards a lower mean level of production.
+
 ```{r}
 plot_series(aus_production, Bricks)
 ```
+
+### Hare Pelt Harvesting Series
+
+The pelt trade was naturally seasonal, due to the nature of the animals from which they were harvested from and their lifecycle. This is supported emperically by the data.
+
+From the data available we see a very flat trend, neither upwards or downwards, punctuated with a high degree of seasonality. Of especial interest is the autocorrolation function, which highlights the autocorrelation of the series dropping off as the peak hunting seasons end.
+
+We can see one peak in particular around 1862, tripling the mean of pelts across the timeseries. This may have been a year of particularly beneficial weather or high hare population, or perhaps simply a temporal high demand.
 
 ```{r}
 plot_series(tsibbledata::pelt, Hare, period = '1y')
 ```
 
+### PBS Cost of Co-payments Series
+
+The PBS data is a bit complex. It covers prescriptions costs across multiple categories which can broadly be broken into Co-payments, where an individual pays for a script out of pocket, and Saftey Net, the additional cost beyond a specific threshold which is subsidized.
+
+The main story in this data is the increasing costs of subsidized Safety nets. The trend is growing positively and inversely to co-payments, indicating that more and more health costs are being subsidized.
+
+From a seasonality perspective, we can observe saftey net (and conversely the lowest co-payments) script costs increase throughout the year, peaking in January before dramatically falling off.
+
+The autocorrelation plot supports this with a cosine shaped distribution, showing the highest correlation around December and January.
+
+
 ```{r}
 # PBS
 pbs <- tsibbledata::PBS |> 
-  filter(ATC2=="H02") |> 
-  group_by(Month) |> 
-  summarize(total_cost = sum(Cost))
-  
+  filter(ATC2=="H02")
+
 plot_series(data=pbs, Cost)
 ```
 
+### United States Gasoline Production Series
+
+U.S. gasoline production is displayed in these graphs. Another interesting trend, where we see an increase up to the early 2000's before starting to dip and rise again with greater variability. The series is still highly autocorrolated.
+
+As expected, there's seasonality in summer months, however a surprising increase around major U.S. Holidays, specifically Thanksgiving and Christmas. Given this is related to U.S. production, I would not expect high travel to impact these numbers. More domain knowledge would perhaps explain this data.
+
+```{r}
+usgas <- fpp3::us_gasoline
+plot_series(usgas, Barrels)
+```
 
