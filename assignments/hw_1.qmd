@@ -1,7 +1,12 @@
 ---
 title: "DATA 624 Homework 1"
-format: html
+format:
+  html:
+    self-contained: true
 author: "Kevin Havis"
+execute:
+  echo: true
+  warning: false
 ---
 
 ```{r}
@@ -10,10 +15,12 @@ library(fpp3)
 library(tsibble)
 library(ggplot2)
 library(tsibbledata)
+library(knitr)
 ```
 
 # Homework 1
 
+The document contains selected exercises from [Hyndman, Athanasopoulos "Forecasting: Principles and Practice" 3rd Edition, Chapter 2](https://otexts.com/fpp3/graphics-exercises.html)
 
 ## Exercise 2.1
 
@@ -42,7 +49,8 @@ top_stock_days <- gafa_stock |>
   group_by(Symbol) |> 
   slice_max(Close, n=1) # Gets the max for each element I've grouped (Symbol)
 
-head(top_stock_days)
+kable(head(top_stock_days))
+
 ```
 
 ## Exercise 2.3
@@ -50,14 +58,15 @@ head(top_stock_days)
 ```{r}
 # Read data from URL
 tute1 <- read_csv("https://otexts.com/fpp3/extrafiles/tute1.csv")
-head(tute1)
+kable(head(tute1))
 ```
+
 ```{r}
 # Convert to tsibble
 mytimeseries <- tute1 |>
   mutate(Quarter = yearquarter(Quarter)) |> # Formats date to yearquarter type
   as_tsibble(index = Quarter) # Converts to tsibble
-head(mytimeseries)
+kable(head(mytimeseries))
 ```
 
 ```{r}
@@ -81,7 +90,6 @@ library(USgas)
 head(usgas)
 ```
 
-
 ```{r}
 # Plot the New England states
 ne_gas <- usgas |> 
@@ -91,7 +99,7 @@ ne_gas <- usgas |>
   filter(state %in% c("Maine", "Vermont", "New Hampshire", "Massachusetts", "Connecticut","Rhode Island")) |> 
   as_tsibble(index=Year, key=state)
 
-head(ne_gas)
+kable(head(ne_gas))
 ```
 
 ```{r}
@@ -107,15 +115,14 @@ ne_gas |>
 ```{r}
 # Load the tourism data from the package
 # Our reference point
-head(tsibble::tourism)
+kable(head(tsibble::tourism))
 ```
-
 
 ```{r}
 # Download the example tourism file
 library(readxl)
 my_tourism <- read_excel("~/projects/data_624/assignments/tourism.xlsx")
-head(my_tourism)
+kable(head(my_tourism))
 ```
 
 ```{r}
@@ -124,7 +131,7 @@ head(my_tourism)
 my_tourism <- my_tourism |>
   mutate(Quarter = yearquarter(Quarter))
 
-head(my_tourism)
+kable(head(my_tourism))
 ```
 
 ```{r}
@@ -149,11 +156,10 @@ my_tourism |>
 
 Observing the various plots below of our `aus_arrivals` data, there are a few interesting observations we can make.
 
-1. *Seasonality*: We can see decrease in travel to Australia from the US and UK during the middle months, the inverse for New Zealand
-2. *Trend*: Flights to Australia have generally increased overtime, with the exception of those from Japan which sharply falls after early 1990s
+1.  *Seasonality*: We can see decrease in travel to Australia from the US and UK during the middle months, the inverse for New Zealand
+2.  *Trend*: Flights to Australia have generally increased overtime, with the exception of those from Japan which sharply falls after early 1990s
 
 For seasonality plots, the `gg_season` plot is well suited for general observations, but I prefer the detail and addition of the mean we get "for free" from the `gg_subseries` plot.
-
 
 ```{r}
 # Get the aus_arrival data from the package
@@ -164,6 +170,7 @@ arrival_data <- fpp3::aus_arrivals
 # Try autoplot
 autoplot(arrival_data)
 ```
+
 ```{r}
 # Try seasons
 library(feasts)
@@ -185,7 +192,7 @@ In addition, we can see the seasonality, especially in the `gg_subseries` plot, 
 
 The trend, or the long-term direction of the series over time, is positive, as we can see in the rising Turnover rates, especially from 2000 and onward.
 
-As far as cycles, or smaller repetitions within seasons, the visualizations available do not show anything convincing, however "zooming in" on a smaller time interval may show things like weekends having some impact.
+As far as cycles, there may be a subtle 5-7 cycle of low to high turnover that is becoming more exaggerated in recent years, showing between '86-'88, '93-'00, and '06-'12, but would need to be confirmed analytically.
 
 ```{r}
 # Pick a series to plot
@@ -217,9 +224,9 @@ myseries |> ACF(Turnover) |> autoplot()
 
 ## Exercise 2.8
 
-Use the following graphics functions: autoplot(), gg_season(), gg_subseries(), gg_lag(), ACF() and explore features from the following time series: “Total Private” Employed from us_employment, Bricks from aus_production, Hare from pelt, “H02” Cost from PBS, and Barrels from us_gasoline.
-
 ```{r}
+# Generate plots of all the data
+# We create a function to do this repeatedly
 plot_series <- function(data, value_col, period = NULL) {
   print(data |> autoplot(.vars = {{ value_col }}) + labs(title = "Time Series Plot"))
   
@@ -258,7 +265,6 @@ We can see brief periods of downwards employment trends periodically through the
 One such downturn aligns with the recession and housing market crash of 2008, which is clear in the data.
 
 Overall, the graphs show a positive and relatively stable growth of employment in the United States private sector.
-
 
 ```{r}
 # US Employement
@@ -308,7 +314,6 @@ From a seasonality perspective, we can observe saftey net (and conversely the lo
 
 The autocorrelation plot supports this with a cosine shaped distribution, showing the highest correlation around December and January.
 
-
 ```{r}
 # PBS
 pbs <- tsibbledata::PBS |> 
@@ -328,3 +333,6 @@ usgas <- fpp3::us_gasoline
 plot_series(usgas, Barrels)
 ```
 
+# Conclusion
+
+Visualizations condense much information into a singular picture that takes advantage of the way our brains work to quickly understand the data we're working with. Combining the visuals with time series data allows us to observe the cadences of the data easily, and is a great starting point for working with time series data.
