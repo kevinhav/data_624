@@ -1,0 +1,240 @@
+---
+title: "Homework 2"
+subtitle: "DATA 624"
+author: "Kevin Havis"
+date: today
+date-format: "MMMM D, YYYY"
+format: 
+  html:
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    code-fold: false
+    theme: cosmo
+    embed-resources: true
+  pdf:
+    toc: true
+    number-sections: true
+    colorlinks: true
+execute:
+  warning: false
+  message: false
+  echo: true
+  cache: false
+---
+
+```{r}
+#| label: setup
+#| include: false
+
+# Load required libraries
+library(tidyverse)
+library(fpp3)
+library(ggplot2)
+library(forcats)
+library(slider)
+
+
+# Set ggplot theme
+theme_set(theme_minimal())
+```
+
+# Homework 2 - Chapter 3 Exercises
+
+## Exercise 3.1
+Consider the GDP information in `global_economy`. Plot the GDP per capita for each country over time. Which country has the highest GDP per capita? How has this changed over time?
+
+```{r}
+head(tsibbledata::global_economy)
+
+# There's 250+ countries so limiting for plotting purposes
+autoplot(global_economy, .vars=gdp_capita)
+
+```
+
+## Exercise 3.2
+For each of the following series, make a graph of the data. If transforming seems appropriate, do so and describe the effect.
+* United States GDP from `global_economy`.
+* Slaughter of Victorian "Bulls, bullocks and steers" in `aus_livestock`.
+* Victorian Electricity Demand from `vic_elec`.
+* Gas production from `aus_production`.
+
+### Response
+
+#### U.S. Economy
+
+The U.S. Economy data appeared to be slightly quadratic, so I applied a square root on the GDP to get a more linear result. We also could a apply a per-capita effect if desired, useful when comparing to other countries.
+
+```{r}
+# US Econ
+us_econ <- global_economy |> 
+  filter(Code == "USA")
+
+autoplot(us_econ) + labs(title = "United States Economy")
+autoplot(us_econ, sqrt(GDP)) + labs(title="United States Economy w/ Square Root GDP")
+```
+
+
+#### Beef Livestock
+
+This timeseries is quite busy with many month-to-month variations. I have applied a simple five month moving average to help smooth the overal pattern, which still reveals seasonality, but makes it more clear and the trend more obvious.
+
+```{r}
+# Livestock
+beef <- aus_livestock |> 
+  filter(Animal == "Bulls, bullocks and steers") |> 
+  filter(State == "Victoria")
+
+# A very noisy time series
+autoplot(beef) + labs(title="Victorian Bulls, bullocks, and steers (Original)")
+
+# Use basic moving average smoothing
+smooth_beef <- beef |> 
+  arrange(Month) |> 
+  mutate(
+    ma_5 = slide_dbl(Count, mean, .before=2, .after=2, .complete=TRUE)
+  )
+autoplot(smooth_beef, ma_5) + labs(title="Victorian Bulls, bullocks, and steers (Moving Average)")
+```
+#### Victoria Electricity Demand
+
+This is the most detailed data we have seen yet; the data represents electricity demand down to the half hour.
+
+While there are likely interesting observations in such granular data, we could use a moving average of the demand to eliminate the interday seasonality, looking back and forward by 12 hours (24 half hour intervals).
+
+While still a very visually dense graph, this transformation it "thins" the series enough to be more digestible.
+
+These types of transformations demand on the objective, and instead of transforming, decomposition would be more generally useful to extract different levels of seasonality.
+
+
+```{r}
+# Vic Elec Demand
+vic_elec |> 
+  autoplot() + labs(title="Victoria Electricity Demand")
+
+vic_elec |> 
+  arrange(Time) |> 
+  mutate(ma_24 = slide_dbl(Demand, mean, .before =24, .after=24, .complete=TRUE)) |> 
+  autoplot(ma_24) + labs(title="Victoria Electricity Demand (Daily Moving Average)")
+
+```
+
+#### AUS Production
+
+Australian gas production has increased but become more varied as time has gone on. This is a great use case for a Box Cox transformation to help "squish" the variance to a regularized amount to make the time series more comparable over time.
+
+We can use the `guerrero` optimizer to find a value of lambda (the Box Cox parameter) that works well for our data.
+
+Upon transforming, we can see our time series has a much more consistent level of variance over time, making further analysis easier. We must remember to reverse the transformation before interpreting though!
+
+```{r}
+# AUS Production
+aus_production |> 
+  autoplot(Gas)
+
+# Straight from the textbook
+lambda <- aus_production |>
+  features(Gas, features = guerrero) |>
+  pull(lambda_guerrero)
+aus_production |>
+  autoplot(box_cox(Gas, lambda)) +
+  labs(title="AUS Gas Production (Guerrero-Optimized Box Cox Transformation")
+```
+
+
+## Exercise 3.3
+Why is a Box-Cox transformation unhelpful for the `canadian_gas` data?
+
+### Response
+
+Box Cox transformations can be helpful when the variance of a series trends in one direction or another with some consistency. 
+
+Reviewing the `canadian_gas` series, the variance starts small, increases through the middle of the series, and then becomes small yet more erratic in the recent data. Applying a Box Cox transformation would apply the same effect (compressing or expanding) to *all points* of the time series, meaning the transformation would do a poor job normalizing this series.
+
+A better option would be Loess smoothing, which uses localized data to dynamically smooth the curve.
+
+```{r}
+canadian_gas |> 
+  autoplot() + labs(title="CAD Gas Production")
+
+gas_lambda <- canadian_gas |>
+  features(Volume, features = guerrero) |>
+  pull(lambda_guerrero)
+
+canadian_gas |>
+  autoplot(box_cox(Volume, gas_lambda)) +
+  labs(title="CAD Gas Production (Ineffective Box Cox Transformation")
+
+canadian_gas |> 
+  autoplot() +
+  geom_smooth() +
+  labs(title="CAD Gas Production with Loess Smoothing")
+```
+
+## Exercise 3.4
+What Box-Cox transformation would you select for your retail data (from Exercise 7 in Section 2.10)?
+
+### Response
+
+The variance of this time series grows quite quickly, and as such we will need a more intense transformation.
+
+A Box Cox transformation with $\lambda = 0$ gives us the desired effect. This is a log transformation, and once applied, we can we see that it has effectively standardized the variance across the series.
+
+```{r}
+set.seed(42)
+
+myseries <- aus_retail |>
+  filter(`Series ID` == sample(aus_retail$`Series ID`,1))
+
+autoplot(myseries) + labs(title="AUS Retail Turnover")
+
+autoplot(myseries, box_cox(Turnover, 0)) + labs(title="AUS Retail Turnover (Box Cox Log Transformed)")
+
+```
+
+## Exercise 3.5
+
+For the following series, find an appropriate Box-Cox transformation in order to stabilise the variance.
+* Tobacco from `aus_production`
+* Economy class passengers between Melbourne and Sydney from `ansett`
+* Pedestrian counts at Southern Cross Station from `pedestrian`
+
+```{r}
+
+```
+
+## Exercise 3.6
+Show that a 3×5 MA is equivalent to a 7-term weighted moving average with weights of 0.067, 0.133, 0.200, 0.200, 0.200, 0.133, and 0.067.
+```{r}
+
+```
+
+## Exercise 3.7
+Consider the last five years of the Gas data from `aus_production`.
+```{r}
+gas <- tail(aus_production, 5*4) |> select(Gas)
+```
+
+1. Plot the time series. Can you identify seasonal fluctuations and/or a trend-cycle?
+2. Use `classical_decomposition` with `type=multiplicative` to calculate the trend-cycle and seasonal indices.
+3. Do the results support the graphical interpretation from part a?
+4. Compute and plot the seasonally adjusted data.
+5. Change one observation to be an outlier (e.g., add 300 to one observation), and recompute the seasonally adjusted data. What is the effect of the outlier?
+6. Does it make any difference if the outlier is near the end rather than in the middle of the time series?
+```{r}
+
+```
+
+## Exercise 3.8
+Recall your retail time series data (from Exercise 7 in Section 2.10). Decompose the series using X-11. Does it reveal any outliers, or unusual features that you had not noticed previously?
+```{r}
+
+```
+
+## Exercise 3.9
+Figures 3.19 and 3.20 show the result of decomposing the number of persons in the civilian labour force in Australia each month from February 1978 to August 1995.
+```{r}
+
+```
+
+
