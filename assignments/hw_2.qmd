@@ -33,6 +33,10 @@ library(fpp3)
 library(ggplot2)
 library(forcats)
 library(slider)
+library(stats)
+library(knitr)
+library(tsibbledata)
+library(seasonal)
 
 
 # Set ggplot theme
@@ -42,22 +46,32 @@ theme_set(theme_minimal())
 # Homework 2 - Chapter 3 Exercises
 
 ## Exercise 3.1
+
 Consider the GDP information in `global_economy`. Plot the GDP per capita for each country over time. Which country has the highest GDP per capita? How has this changed over time?
 
-```{r}
-head(tsibbledata::global_economy)
+### Response
 
+I subset the data to make it more manageable for visualization purposes. In my subset, the highest GPD per capita is by far Australia, which has grown steadily, rapidly peaking in 2012 and rapidly descending afterwards.
+
+```{r}
 # There's 250+ countries so limiting for plotting purposes
-autoplot(global_economy, .vars=gdp_capita)
+global_economy_filt <- global_economy |> 
+  mutate(gdp_per_capita = GDP / Population) |> 
+  filter(Country %in% c("Italy", "Spain", "Australia", "Canada"))
+
+print(global_economy_filt |> filter(gdp_per_capita == max(gdp_per_capita)))
+
+ggplot(global_economy_filt, aes(y=gdp_per_capita, x=Year, color=Country)) +
+  geom_line()
+
 
 ```
 
 ## Exercise 3.2
-For each of the following series, make a graph of the data. If transforming seems appropriate, do so and describe the effect.
-* United States GDP from `global_economy`.
-* Slaughter of Victorian "Bulls, bullocks and steers" in `aus_livestock`.
-* Victorian Electricity Demand from `vic_elec`.
-* Gas production from `aus_production`.
+
+## Excerise 3.2
+
+For each of the following series, make a graph of the data. If transforming seems appropriate, do so and describe the effect. \* United States GDP from `global_economy`. \* Slaughter of Victorian "Bulls, bullocks and steers" in `aus_livestock`. \* Victorian Electricity Demand from `vic_elec`. \* Gas production from `aus_production`.
 
 ### Response
 
@@ -73,7 +87,6 @@ us_econ <- global_economy |>
 autoplot(us_econ) + labs(title = "United States Economy")
 autoplot(us_econ, sqrt(GDP)) + labs(title="United States Economy w/ Square Root GDP")
 ```
-
 
 #### Beef Livestock
 
@@ -96,6 +109,7 @@ smooth_beef <- beef |>
   )
 autoplot(smooth_beef, ma_5) + labs(title="Victorian Bulls, bullocks, and steers (Moving Average)")
 ```
+
 #### Victoria Electricity Demand
 
 This is the most detailed data we have seen yet; the data represents electricity demand down to the half hour.
@@ -105,7 +119,6 @@ While there are likely interesting observations in such granular data, we could 
 While still a very visually dense graph, this transformation it "thins" the series enough to be more digestible.
 
 These types of transformations demand on the objective, and instead of transforming, decomposition would be more generally useful to extract different levels of seasonality.
-
 
 ```{r}
 # Vic Elec Demand
@@ -141,13 +154,13 @@ aus_production |>
   labs(title="AUS Gas Production (Guerrero-Optimized Box Cox Transformation")
 ```
 
-
 ## Exercise 3.3
+
 Why is a Box-Cox transformation unhelpful for the `canadian_gas` data?
 
 ### Response
 
-Box Cox transformations can be helpful when the variance of a series trends in one direction or another with some consistency. 
+Box Cox transformations can be helpful when the variance of a series trends in one direction or another with some consistency.
 
 Reviewing the `canadian_gas` series, the variance starts small, increases through the middle of the series, and then becomes small yet more erratic in the recent data. Applying a Box Cox transformation would apply the same effect (compressing or expanding) to *all points* of the time series, meaning the transformation would do a poor job normalizing this series.
 
@@ -172,6 +185,7 @@ canadian_gas |>
 ```
 
 ## Exercise 3.4
+
 What Box-Cox transformation would you select for your retail data (from Exercise 7 in Section 2.10)?
 
 ### Response
@@ -194,47 +208,205 @@ autoplot(myseries, box_cox(Turnover, 0)) + labs(title="AUS Retail Turnover (Box 
 
 ## Exercise 3.5
 
-For the following series, find an appropriate Box-Cox transformation in order to stabilise the variance.
-* Tobacco from `aus_production`
-* Economy class passengers between Melbourne and Sydney from `ansett`
-* Pedestrian counts at Southern Cross Station from `pedestrian`
+For the following series, find an appropriate Box-Cox transformation in order to stabilise the variance. \* Tobacco from `aus_production` \* Economy class passengers between Melbourne and Sydney from `ansett` \* Pedestrian counts at Southern Cross Station from `pedestrian`
+
+### Response
+
+Instead of eyeballing and doing trial by error for each series, we will write a function that uses the `guerrero` optimizer. This optimizer will find the ideal value of $\lambda$ that will normalize the variance via a Box Cox transformation.
 
 ```{r}
+autoplot(aus_production, Tobacco) + labs(title="Original aus_production")
+
+autoplot(ansett |> filter(Class == 'Economy', Airports=="MEL-SYD"), Passengers) + labs(title="Original ansett")
+
+autoplot(pedestrian |> filter(Sensor == "Southern Cross Station"), Count) + labs(title="Original pedestrian")
+
+optim_boxcox <- function(data, feature) {
+  # Use enquo to capture the feature argument
+  feature_quo <- enquo(feature)
+  
+  # Calculate optimal lambda using guerrero method
+  lambda <- data |>
+    features(!!feature_quo, features = guerrero) |>
+    pull(lambda_guerrero)
+  
+  print(paste("Optimum Lambda Value:", lambda))
+  
+  # Create plot with transformed data
+  data |>
+    autoplot(box_cox(!!feature_quo, lambda))
+}
+
+# Call the function
+optim_boxcox(aus_production, Tobacco) + labs(title="Box-Cox aus_production") 
+optim_boxcox(ansett |> filter(Class == 'Economy', Airports=="MEL-SYD"), Passengers) + labs("Box-Cox ansett")
+optim_boxcox(pedestrian |> filter(Sensor == "Southern Cross Station"), Count) + labs(title="Box-Cox pedestrian") 
 
 ```
 
 ## Exercise 3.6
-Show that a 3×5 MA is equivalent to a 7-term weighted moving average with weights of 0.067, 0.133, 0.200, 0.200, 0.200, 0.133, and 0.067.
-```{r}
 
+Show that a 3×5 MA is equivalent to a 7-term weighted moving average with weights of 0.067, 0.133, 0.200, 0.200, 0.200, 0.133, and 0.067.
+
+### Response
+
+I've shown below analytically that the outcome for these two computations are the same. Moving averages are effectively weighting coefficients on each period of the time series, and as long as the weights both sum to one across the same range of periods, they will be equivalent.
+
+```{r}
+# Create a dummy series
+my_series <- sample(1:20, size=20, replace=TRUE)
+
+# Turn it into a tibble
+my_ts <- tibble(
+  year = 1:20, value = my_series
+)
+
+# Apply slider moving average, 3 then 5 to get 3x5
+ma_ts <- my_ts |> 
+  mutate(
+    `3-MA` = slider::slide_dbl(value, mean,
+                .before = 1, .after = 1, .complete = TRUE),
+    `3x5-MA` = slider::slide_dbl(`3-MA`, mean,
+                .before = 2, .after = 2, .complete = TRUE)
+  )
+
+# Establish our weights
+weights <- c(0.067, 0.133, 0.200, 0.200, 0.200, 0.133, 0.067)
+
+# Function apply weights
+ma_weighted <- function(x, weights) {
+  weighted_ma <- stats::filter(x, weights, sides = 2)
+  return(as.numeric(weighted_ma))
+}
+
+# Add weighted values to tibble
+weight_ts <- ma_ts |> 
+  mutate(weighted_value = ma_weighted(my_ts$value, weights))
+
+# Display results
+weight_ts |> 
+  drop_na() |> 
+  select(year, "3x5-MA", weighted_value) |> 
+  kable()
 ```
 
 ## Exercise 3.7
+
 Consider the last five years of the Gas data from `aus_production`.
+
+1.  Plot the time series. Can you identify seasonal fluctuations and/or a trend-cycle?
+
 ```{r}
 gas <- tail(aus_production, 5*4) |> select(Gas)
+
+# Plot the time series
+autoplot(gas)
 ```
 
-1. Plot the time series. Can you identify seasonal fluctuations and/or a trend-cycle?
-2. Use `classical_decomposition` with `type=multiplicative` to calculate the trend-cycle and seasonal indices.
-3. Do the results support the graphical interpretation from part a?
-4. Compute and plot the seasonally adjusted data.
-5. Change one observation to be an outlier (e.g., add 300 to one observation), and recompute the seasonally adjusted data. What is the effect of the outlier?
-6. Does it make any difference if the outlier is near the end rather than in the middle of the time series?
+We can definitely see seasonal peaks and valleys in the data, espcially around winter months (assuming northern hemisphere).
+
+2.  Use `classical_decomposition` with `type=multiplicative` to calculate the trend-cycle and seasonal indices.
+
 ```{r}
+gas_decomp <- gas |> 
+    model(
+    classical_decomposition(Gas, type='multiplicative')
+  ) |> 
+  components()
 
+kable(head(gas_decomp))
 ```
+
+3.  Do the results support the graphical interpretation from part a?
+
+The seasonal component of the time series clearly shows regular seasonal changes. This supports our early "eyeballed" assessment.
+
+4.  Compute and plot the seasonally adjusted data.
+
+```{r}
+gas |> 
+  model(
+    classical_decomposition(Gas, type='multiplicative')
+  ) |> 
+  components() |> 
+  autoplot()
+```
+
+5.  Change one observation to be an outlier (e.g., add 300 to one observation), and recompute the seasonally adjusted data. What is the effect of the outlier?
+
+The outlier affect the trend and random componenets, but the seasonal component is largely unaffected. This is because we only observe the outlier once, so it is not "picked up" as a repeating seasonal trend.
+
+```{r}
+gas_outlier <- gas |> 
+  mutate(
+    Gas = ifelse(Quarter == yearquarter('2008 Q4'), Gas + 500, Gas)
+  )
+
+gas_outlier |> 
+  model(
+    classical_decomposition(type="multiplicative")
+  ) |> 
+  components() |> 
+  autoplot() + labs(title="Gas with 2008 Q4 outlier")
+```
+
+6.  Does it make any difference if the outlier is near the end rather than in the middle of the time series?
+
+Adding the outlier to the end of the series has still not affected the seasonality, for the same reasons mentioned above.
+
+```{r}
+gas_late_outlier <- gas |> 
+  mutate(
+    Gas = ifelse(Quarter == yearquarter('2010 Q2'), Gas + 500, Gas)
+  )
+
+gas_late_outlier |> 
+  model(
+    classical_decomposition(type="multiplicative")
+  ) |> 
+  components() |> 
+  autoplot() + labs(title="Gas with 2010 Q2 outlier")
+```
+
 
 ## Exercise 3.8
-Recall your retail time series data (from Exercise 7 in Section 2.10). Decompose the series using X-11. Does it reveal any outliers, or unusual features that you had not noticed previously?
-```{r}
 
+Recall your retail time series data (from Exercise 7 in Section 2.10). Decompose the series using X-11. Does it reveal any outliers, or unusual features that you had not noticed previously?
+
+### Response
+
+Decomposing the time series using X-11 allows us to see two important things. 
+
+Firstly, there are several positive outliers near January 2010 in the residual component, where we can see spikes of similar magnitude to the regular seasonality - this was not obvious from the original graph.
+
+Secondly, We can see that the seasonality trend is widening as time goes on, meaning the seasonality is becoming slightly more gradual.
+
+```{r}
+set.seed(42)
+
+myseries <- tsibbledata::aus_retail |>
+  filter(`Series ID` == sample(aus_retail$`Series ID`,1))
+
+myseries |> 
+  model(
+    x11 = X_13ARIMA_SEATS(Turnover ~ x11())
+  ) |>
+  components() |> 
+  autoplot()
 ```
 
 ## Exercise 3.9
+
 Figures 3.19 and 3.20 show the result of decomposing the number of persons in the civilian labour force in Australia each month from February 1978 to August 1995.
-```{r}
 
-```
+Write about 3–5 sentences describing the results of the decomposition. Pay particular attention to the scales of the graphs in making your interpretation.
 
+![](~/projects/data_624/assignments/labour-1.png)
 
+![](~/projects/data_624/assignments/labour2-1.png)
+
+The decomposition reveals that the largest component of this series is trend. Seasonality has been extracted, but plays a much smaller role overall, orders of magnitude smaller than the trend component (only $\pm 50$ on a scale of thousands). In fact, the seasonal component is the smallest one; even the remainder plays a larger role.
+
+Is the recession of 1991/1992 visible in the estimated components?
+
+Yes, but only in the remainder component. We would not expect to see something like a single recession in the seasonality trend, given it only occurs once
