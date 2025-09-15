@@ -77,31 +77,77 @@ ap_fc |> autoplot() + autolayer(ap) +
 ```{r}
 # Bricks
 bricks <- tsibbledata::aus_production |> 
-  select(c(Quarter, Bricks))
+  select(c(Quarter, Bricks)) |> 
+  filter(!is.na(Bricks))
 
 # Visualize to pick model
 autoplot(bricks)
 
 # We choose Naive due to straightforward linear data
-bricks_naive <- bricks |> model(SNAIVE(Bricks))
+bricks_snaive <- bricks |> model(SNAIVE(Bricks))
 
-bricks_fc <- bricks_naive |> forecast(h=20)
+bricks_fc <- bricks_snaive |> forecast(h=5)
 
-bricks_fc |> autoplot() + autolayer(bricks) +
-  labs(title="10 Year Naive Forecast of Australia Population") +
-  guides(color = guide_legend(title="Forecast"))
+bricks_fc |> autoplot(bricks, show_gap = FALSE, level = NULL) +
+  labs(title = "5 Quarter Naive Forecast of Bricks Production") +
+  guides(color = guide_legend(title = "Forecast"))
 ```
 
 ```{r}
 # NSW Lambs
+nsw <- tsibbledata::aus_livestock |> 
+  filter(Animal == "Lambs", State == "New South Wales") |> 
+  filter(!is.na(Count))
+
+# Visualize to pick model
+autoplot(nsw)
+
+# We choose SNAIVE due to seasonal patterns in livestock data
+nsw_snaive <- nsw |> model(SNAIVE(Count))
+nsw_fc <- nsw_snaive |> forecast(h = 5)
+
+nsw_fc |> autoplot(nsw, show_gap = FALSE, level = NULL) +
+  labs(title = "5 Period Seasonal Naive Forecast of NSW Lambs") +
+  guides(color = guide_legend(title = "Forecast"))
+
 ```
 
 ```{r}
-# Wealth
+# Household wealth
+wealth <- tsibbledata::hh_budget |> 
+  select(Year, Wealth) |>
+  filter(!is.na(Wealth))
+
+# Visualize to pick model
+autoplot(wealth)
+
+# We choose Naive with drift due to trending data
+wealth_naive <- wealth |> model(NAIVE(Wealth ~ drift()))
+wealth_fc <- wealth_naive |> forecast(h = 5)
+
+wealth_fc |> autoplot(wealth, show_gap = FALSE, level = NULL) +
+  labs(title = "5 Year Naive with Drift Forecast of Household Wealth") +
+  guides(color = guide_legend(title = "Forecast"))
 ```
 
 ```{r}
-# Australian takeaway food turnover
+# Australian takeaway food turnover#
+# Filtering for Australian Capital Territory for simplicity
+takeaway <- tsibbledata::aus_retail |> 
+  filter(Industry == "Cafes, restaurants and takeaway food services") |>
+  filter(!is.na(Turnover)) |> 
+  filter(State == "Australian Capital Territory")
+
+# Visualize to pick model
+autoplot(takeaway)
+
+# We choose SNAIVE due to seasonal patterns in retail data
+takeaway_snaive <- takeaway |> model(SNAIVE(Turnover))
+takeaway_fc <- takeaway_snaive |> forecast(h = 12)
+
+takeaway_fc |> autoplot(takeaway, show_gap = FALSE, level = NULL) +
+  labs(title = "12 Period Seasonal Naive Forecast of Takeaway Food Turnover") +
+  guides(color = guide_legend(title = "Forecast"))
 ```
 
 
@@ -114,7 +160,22 @@ Use the Facebook stock price (data set `gafa_stock`) to do the following:
 4. Try using some of the other benchmark functions to forecast the same data set. Which do you think is best? Why?
 
 ```{r}
+fb <- tsibbledata::gafa_stock |> 
+  filter(Symbol == "FB") |> 
+  mutate(day = row_number()) |>
+  update_tsibble(index = day, regular = TRUE)
 
+autoplot(fb)
+
+fb_drift <- fb |> 
+  model(NAIVE(Close~drift()))
+
+fb_fc <- fb_drift |> forecast(h=100)
+
+fb_fc |> autoplot(fb, show_gap=FALSE, level=NULL)
+
+# Manually calculate drift slope with first and last obs
+# TODO
 ```
 
 ## Exercise 5.3
