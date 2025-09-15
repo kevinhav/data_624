@@ -1,0 +1,193 @@
+---
+title: "Homework 3"
+subtitle: "DATA 624"
+date: today
+date-format: "MMMM D, YYYY"
+format: 
+  html:
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    code-fold: false
+    theme: cosmo
+    embed-resources: true
+author: "Kevin Havis"
+  pdf:
+    toc: true
+    number-sections: true
+    colorlinks: true
+execute:
+  warning: false
+  message: false
+  echo: true
+  cache: false
+---
+
+# Homework 3
+
+```{r}
+#| label: setup
+#| include: false
+
+# Load required libraries
+library(tidyverse)
+library(fpp3)
+
+
+# Set default chunk options
+knitr::opts_chunk$set(
+  fig.width = 8,
+  fig.height = 6,
+  fig.align = "center",
+  out.width = "80%"
+)
+
+# Set ggplot theme
+theme_set(theme_minimal())
+```
+
+## Exercise 5.1
+
+Produce forecasts for the following series using whichever of `NAIVE(y)`, `SNAIVE(y)` or `RW(y ~ drift())` is more appropriate in each case:
+* Australian Population (`global_economy`)
+* Bricks (`aus_production`)
+* NSW Lambs (`aus_livestock`)
+* Household wealth (`hh_budget`)
+* Australian takeaway food turnover (`aus_retail`)
+
+```{r}
+# Australian Population
+ap <- tsibbledata::global_economy |> 
+  filter(Country == "Australia") |> 
+  select(c(Year, Population))
+
+# Visualize to pick model
+autoplot(ap)
+
+# We choose Naive due to straightforward linear data
+ap_naive <- ap |> model(NAIVE(Population))
+
+ap_fc <- ap_naive |> forecast(h=10)
+
+ap_fc |> autoplot() + autolayer(ap) +
+  labs(title="10 Year Naive Forecast of Australia Population") +
+  guides(color = guide_legend(title="Forecast"))
+```
+
+```{r}
+# Bricks
+bricks <- tsibbledata::aus_production |> 
+  select(c(Quarter, Bricks))
+
+# Visualize to pick model
+autoplot(bricks)
+
+# We choose Naive due to straightforward linear data
+bricks_naive <- bricks |> model(SNAIVE(Bricks))
+
+bricks_fc <- bricks_naive |> forecast(h=20)
+
+bricks_fc |> autoplot() + autolayer(bricks) +
+  labs(title="10 Year Naive Forecast of Australia Population") +
+  guides(color = guide_legend(title="Forecast"))
+```
+
+```{r}
+# NSW Lambs
+```
+
+```{r}
+# Wealth
+```
+
+```{r}
+# Australian takeaway food turnover
+```
+
+
+## Exercise 5.2
+
+Use the Facebook stock price (data set `gafa_stock`) to do the following:
+1. Produce a time plot of the series.
+2. Produce forecasts using the drift method and plot them.
+3. Show that the forecasts are identical to extending the line drawn between the first and last observations.
+4. Try using some of the other benchmark functions to forecast the same data set. Which do you think is best? Why?
+
+```{r}
+
+```
+
+## Exercise 5.3
+
+Apply a seasonal naïve method to the quarterly Australian beer production data from 1992. Check if the 
+residuals look like white noise, and plot the forecasts. The following code will help.
+
+```{r}
+# Extract data of interest
+recent_production <- aus_production |>
+  filter(year(Quarter) >= 1992)
+
+# Define and estimate a model
+fit <- recent_production |>
+  model(SNAIVE(Beer))
+
+# Look at the residuals
+fit |> gg_tsresiduals()
+
+# Look at some forecasts
+fit |> forecast() |> autoplot(recent_production)
+```
+
+What do you conclude?
+```{r}
+
+```
+
+## Exercise 5.4
+
+Repeat the previous exercise using the Australian Exports series from `global_economy` and the Bricks series from `aus_production`. Use whichever of `NAIVE()` or `SNAIVE()` is more appropriate in each case.
+```{r}
+
+```
+
+## Exercise 5.7
+For your retail time series (from Exercise 7 in Section 2.10):
+
+1. Create a training dataset consisting of observations before 2011 using
+```{r}
+myseries_train <- myseries |> filter(year(Month) < 2011)
+```
+
+2. Check that your data have been split appropriately by producing the following plot.
+```{r}
+autoplot(myseries, Turnover) + 
+  autolayer(myseries_train, Turnover, colour = "red")
+```
+
+3. Fit a seasonal naïve model using `SNAIVE()` applied to your training data (`myseries_train`).
+```{r}
+fit <- myseries_train |> model(SNAIVE(Turnover))
+```
+
+4. Check the residuals.
+```{r}
+fit |> gg_tsresiduals()
+```
+Do the residuals appear to be uncorrelated and normally distributed?
+
+5. Produce forecasts for the test data
+```{r}
+fc <- fit |> forecast(new_data = anti_join(myseries, myseries_train))
+fc |> autoplot(myseries)
+```
+
+6. Compare the accuracy of your forecasts against the actual values.
+```{r}
+fit |> accuracy()
+fc |> accuracy(myseries)
+```
+
+7. How sensitive are the accuracy measures to the amount of training data used?
+```{r}
+
+```

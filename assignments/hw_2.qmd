@@ -67,8 +67,6 @@ ggplot(global_economy_filt, aes(y=gdp_per_capita, x=Year, color=Country)) +
 
 ```
 
-## Exercise 3.2
-
 ## Excerise 3.2
 
 For each of the following series, make a graph of the data. If transforming seems appropriate, do so and describe the effect. \* United States GDP from `global_economy`. \* Slaughter of Victorian "Bulls, bullocks and steers" in `aus_livestock`. \* Victorian Electricity Demand from `vic_elec`. \* Gas production from `aus_production`.
