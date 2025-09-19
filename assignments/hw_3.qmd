@@ -3,6 +3,7 @@ title: "Homework 3"
 subtitle: "DATA 624"
 date: today
 date-format: "MMMM D, YYYY"
+author: "Kevin Havis"
 format: 
   html:
     toc: true
@@ -11,7 +12,6 @@ format:
     code-fold: false
     theme: cosmo
     embed-resources: true
-author: "Kevin Havis"
   pdf:
     toc: true
     number-sections: true
@@ -21,6 +21,7 @@ execute:
   message: false
   echo: true
   cache: false
+  eval: true
 ---
 
 # Homework 3
@@ -32,15 +33,7 @@ execute:
 # Load required libraries
 library(tidyverse)
 library(fpp3)
-
-
-# Set default chunk options
-knitr::opts_chunk$set(
-  fig.width = 8,
-  fig.height = 6,
-  fig.align = "center",
-  out.width = "80%"
-)
+library(knitr)
 
 # Set ggplot theme
 theme_set(theme_minimal())
@@ -59,7 +52,7 @@ Produce forecasts for the following series using whichever of `NAIVE(y)`, `SNAIV
 # Australian Population
 ap <- tsibbledata::global_economy |> 
   filter(Country == "Australia") |> 
-  select(c(Year, Population))
+  select(Year, Population)
 
 # Visualize to pick model
 autoplot(ap)
@@ -200,18 +193,63 @@ fit |> forecast() |> autoplot(recent_production)
 ```
 
 What do you conclude?
-```{r}
 
-```
+The residuals appear to be roughly centered around zero and normally distributed indicating homoscedasticity. This is a good indicator that our model has explained much of the variance in the data and there is little to no "signal" left, only "noise".
 
 ## Exercise 5.4
 
 Repeat the previous exercise using the Australian Exports series from `global_economy` and the Bricks series from `aus_production`. Use whichever of `NAIVE()` or `SNAIVE()` is more appropriate in each case.
-```{r}
 
+### Australian Exports
+
+Using a naive model for the Australian exports, we get a very well distributed set of residuals, normally distributed and a mean of zero. While the range of forecast values is wide, the naive method does a good job of extracting the available signal.
+
+
+```{r}
+# 
+aus_exports <- tsibbledata::global_economy |> 
+  select(Year, Exports) |> 
+  filter(Country == "Australia")
+
+# Define and estimate a model
+aus_exports_fit <- aus_exports |>
+  model(NAIVE())
+
+# Look at the residuals
+aus_exports_fit |> gg_tsresiduals()
+
+# Look at some forecasts
+aus_exports_fit |> forecast() |> autoplot(aus_exports)
 ```
 
+### Bricks
+
+Neither naive (not pictured) nor seasonal naive seem to do particularly well for the brick dataset. While technically our residuals are centered around zero, the ACF and residual plot indicates to me there is some additional level of seasonality that this naive model is failing to capture. Seeing the ACF cycle and the patterns in the residuals plot, I would be confident that better forecasting performance could be achieved with a model that could better capture intra-season nuances.
+
+```{r}
+# Define and estimate a model
+bricks_fit <- bricks |>
+  model(SNAIVE())
+
+# Look at the residuals
+bricks_fit |> gg_tsresiduals()
+
+# Look at some forecasts
+bricks_fit |> forecast() |> autoplot(bricks) 
+```
+
+
 ## Exercise 5.7
+
+```{r}
+# Initiate "myseries" from prior exercise
+set.seed(42)
+
+myseries <- aus_retail |>
+  filter(`Series ID` == sample(aus_retail$`Series ID`,1))
+```
+
+
 For your retail time series (from Exercise 7 in Section 2.10):
 
 1. Create a training dataset consisting of observations before 2011 using
@@ -236,6 +274,8 @@ fit |> gg_tsresiduals()
 ```
 Do the residuals appear to be uncorrelated and normally distributed?
 
+The residuals are normally distributed, however they are not uncorrelated - the ACF graph shows that very few months are within statistical expectations for random correlation, which tells us there is more signal to be uncovered in this data.
+
 5. Produce forecasts for the test data
 ```{r}
 fc <- fit |> forecast(new_data = anti_join(myseries, myseries_train))
@@ -249,6 +289,5 @@ fc |> accuracy(myseries)
 ```
 
 7. How sensitive are the accuracy measures to the amount of training data used?
-```{r}
 
-```
+The testing data compared worse across all measures compared to the training data, which is expected. The in-sample training data that the model sees should in general be more accurate than future, "unseen" data. From the chart it appears that the seasonality and forecasts were within a reasonable range, however the lack of additional data from 2010 and means the model could not account for the upwards trend. As such, our actual forecast values are off the mark, with a $MASE = 1.79$.
