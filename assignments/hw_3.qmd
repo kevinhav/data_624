@@ -5,6 +5,10 @@ date: today
 date-format: "MMMM D, YYYY"
 author: "Kevin Havis"
 format: 
+  pdf:
+    toc: true
+    number-sections: true
+    colorlinks: true
   html:
     toc: true
     toc-depth: 3
@@ -12,10 +16,6 @@ format:
     code-fold: false
     theme: cosmo
     embed-resources: true
-  pdf:
-    toc: true
-    number-sections: true
-    colorlinks: true
 execute:
   warning: false
   message: false
