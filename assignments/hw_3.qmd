@@ -5,6 +5,10 @@ date: today
 date-format: "MMMM D, YYYY"
 author: "Kevin Havis"
 format: 
+  pdf:
+    toc: true
+    number-sections: true
+    colorlinks: true
   html:
     toc: true
     toc-depth: 3
@@ -12,10 +16,6 @@ format:
     code-fold: false
     theme: cosmo
     embed-resources: true
-  pdf:
-    toc: true
-    number-sections: true
-    colorlinks: true
 execute:
   warning: false
   message: false
@@ -152,24 +152,47 @@ Use the Facebook stock price (data set `gafa_stock`) to do the following:
 3. Show that the forecasts are identical to extending the line drawn between the first and last observations.
 4. Try using some of the other benchmark functions to forecast the same data set. Which do you think is best? Why?
 
+In this case I would prefer the naive model. The drift model is correctly picking up the trend of the overall timeseries, however given the sudden peak and descent of the data, I think it is erroneous to assume the previous upward trend is still in effect.
+
+The naive model will give us a simple estimate, but in this scenario, a more reasonable one.
+
 ```{r}
+# Produce time plot
 fb <- tsibbledata::gafa_stock |> 
   filter(Symbol == "FB") |> 
   mutate(day = row_number()) |>
+  select(day, Close) |> 
   update_tsibble(index = day, regular = TRUE)
 
-autoplot(fb)
+autoplot(fb)+labs(title="Facebook Share Price")
 
+# Produce forecasts
 fb_drift <- fb |> 
   model(NAIVE(Close~drift()))
 
 fb_fc <- fb_drift |> forecast(h=100)
 
-fb_fc |> autoplot(fb, show_gap=FALSE, level=NULL)
+fb_fc |> autoplot(fb, show_gap=FALSE, level=NULL)+labs(title="Drift model forecasting FB Share Price")
 
 # Manually calculate drift slope with first and last obs
-# TODO
+first_obs <- fb |> slice_head(n=1)
+last_obs <- fb |> slice_tail(n=1)
+
+fb_fc |> autoplot(fb, show_gap = FALSE, level = NULL) +
+  geom_segment(aes(x = first_obs$day, y = first_obs$Close,
+                   xend = last_obs$day + 10, yend = last_obs$Close + 
+                   ((last_obs$Close - first_obs$Close) / (last_obs$day - first_obs$day)) * 10),
+               color = "red", linetype = "dashed", size = 0.5) +
+  labs(title="Drift Model vs First and Last Observation Vector")
+
+fb_naive <- fb |> 
+  model(NAIVE(Close))
+
+fb_naive_fc <- fb_naive |> forecast(h=100)
+
+fb_naive_fc |> autoplot(fb, show_gap=FALSE, level=NULL)+labs(title="Naive Forecast of Facebook Share Price")
 ```
+
 
 ## Exercise 5.3
 
@@ -189,7 +212,8 @@ fit <- recent_production |>
 fit |> gg_tsresiduals()
 
 # Look at some forecasts
-fit |> forecast() |> autoplot(recent_production)
+fit |> forecast() |> autoplot(recent_production) +
+  labs(title="Forecast of Beer Production using Seasonal Naive")
 ```
 
 What do you conclude?
@@ -219,7 +243,8 @@ aus_exports_fit <- aus_exports |>
 aus_exports_fit |> gg_tsresiduals()
 
 # Look at some forecasts
-aus_exports_fit |> forecast() |> autoplot(aus_exports)
+aus_exports_fit |> forecast() |> autoplot(aus_exports) +
+  labs(title="Forecast of Australian Exports using Naive Model")
 ```
 
 ### Bricks
@@ -235,7 +260,8 @@ bricks_fit <- bricks |>
 bricks_fit |> gg_tsresiduals()
 
 # Look at some forecasts
-bricks_fit |> forecast() |> autoplot(bricks) 
+bricks_fit |> forecast() |> autoplot(bricks) +
+  labs(title="Forecast of Australian Brick Production using Seasonal Naive")
 ```
 
 
@@ -279,7 +305,7 @@ The residuals are normally distributed, however they are not uncorrelated - the 
 5. Produce forecasts for the test data
 ```{r}
 fc <- fit |> forecast(new_data = anti_join(myseries, myseries_train))
-fc |> autoplot(myseries)
+fc |> autoplot(myseries) + labs(title="Forecast of Retail Turnover")
 ```
 
 6. Compare the accuracy of your forecasts against the actual values.
