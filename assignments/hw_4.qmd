@@ -57,7 +57,7 @@ From these we can quickly highlight a few correlated predictors;
 - `Mg`, `Ba`, `Ca`: These three negatively correlate with each other, around 44-50%
 
 
-```{r}
+```{r,fig.width=10, fig.height=8}
 Glass |> 
   select(where(is.numeric)) |> 
   GGally::ggpairs(lower = list(continuous = "points"),
@@ -123,15 +123,14 @@ Investigate the frequency distributions for the categorical predictors. Are any 
 Many of the categorical features are highly unbalanced or contain a significant number of null values. Some examples in particular are `mycelium`, which appears to have no observations of the `1` class, and `seed.tmt`, similarly having a very low number of `2` values compared to null values.
 
 
-```{r}
+```{r,fig.width=10, fig.height=8}
 Soybean %>%
   mutate(across(-Class, as.character)) %>%
   pivot_longer(-Class, names_to = "variable", values_to = "level") %>%
   ggplot(aes(x = level)) +
   geom_bar() +
   facet_wrap(~variable, scales = "free_x") +
-  theme_minimal() +
-  theme(strip.text = element_text(size = 8))
+  theme_minimal()
 ```
 
 
