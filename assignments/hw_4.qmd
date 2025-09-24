@@ -5,6 +5,10 @@ author: "Kevin Havis"
 date: today
 date-format: "MMMM D, YYYY"
 format: 
+  pdf:
+    toc: true
+    number-sections: true
+    colorlinks: true
   html:
     toc: true
     toc-depth: 3
@@ -12,10 +16,6 @@ format:
     code-fold: false
     theme: cosmo
     embed-resources: true
-  pdf:
-    toc: true
-    number-sections: true
-    colorlinks: true
 execute:
   warning: false
   message: false
@@ -33,14 +33,6 @@ library(mlbench)
 library(ggplot2)
 library(GGally)
 library(corrr)
-
-# Set default chunk options
-knitr::opts_chunk$set(
-  fig.width = 10,
-  fig.height = 8,
-  fig.align = "center",
-  out.width = "80%"
-)
 
 # Set ggplot theme
 theme_set(theme_minimal())
@@ -64,16 +56,16 @@ From these we can quickly highlight a few correlated predictors;
 - `Si` and `RI`: High negative correlation of 54%
 - `Mg`, `Ba`, `Ca`: These three negatively correlate with each other, around 44-50%
 
+
 ```{r}
 Glass |> 
   select(where(is.numeric)) |> 
-  ggpairs(lower = list(continuous = "points"),
+  GGally::ggpairs(lower = list(continuous = "points"),
           diag = list(
             continuous = wrap("barDiag",
             bins=ceiling(nrow(Glass)/10))
             ),
-          upper = list(continuous = "cor"),
-          progress = FALSE)
+          upper = list(continuous = "cor"))
 ```
 
 ```{r}
@@ -95,7 +87,7 @@ Glass |>
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 ```
 
-Do there appear to be any outliers in the data? Are any predictors skewed?
+**Do there appear to be any outliers in the data? Are any predictors skewed?**
 
 - `K` has a few very high outliers
 - `Ca`, `Ba`, and`Fe` have very long right-tails and skew
@@ -103,12 +95,17 @@ Do there appear to be any outliers in the data? Are any predictors skewed?
 - `Mg` has several very low outliers (zero or nearly zero)
 
 
-Are there any relevant transformations of one of more predictors that might improve the classification model?
+**Are there any relevant transformations of one of more predictors that might improve the classification model?**
+
+Without knowing exactly the reasons for the zero values in these features, it is difficult to suggest a transformation. If the zero values are meaningful, then a log transformation would not be appropriate for many of the features that appear to be skewed (due to high number of missing values).
+
+A log transformation could be useful for `Ca`, as it has a long right tail and no zero values.
 
 ```{r}
 Glass |> 
   ggplot(aes(x=Ca)) + 
-  geom_histogram(bins = 100)
+  geom_histogram(bins = 100)+
+  labs(title="Distribution of Ca")
   
 ```
 
@@ -116,29 +113,48 @@ Glass |>
 ## 3.2
 
 ```{r}
-data("Soybean")
+data(Soybean)
 ```
 
 The soybean data can also be found at the UC Irvine machine learning repository. Data were collected to predict disease in 683 soybeans. The 345 predictors are mostly categorical and include information on the environmental conditions (e.g., temperature, precipitation) and plant conditions (e.g., left spots, mold growth). The outcome labels consists of 19 distinct classes.  
 
 Investigate the frequency distributions for the categorical predictors. Are any of the distributions degenerate in the ways discussed earlier in this chapter?
 
-```{r}
+Many of the categorical features are highly unbalanced or contain a significant number of null values. Some examples in particular are `mycelium`, which appears to have no observations of the `1` class, and `seed.tmt`, similarly having a very low number of `2` values compared to null values.
 
+
+```{r}
+Soybean %>%
+  mutate(across(-Class, as.character)) %>%
+  pivot_longer(-Class, names_to = "variable", values_to = "level") %>%
+  ggplot(aes(x = level)) +
+  geom_bar() +
+  facet_wrap(~variable, scales = "free_x") +
+  theme_minimal() +
+  theme(strip.text = element_text(size = 8))
 ```
 
 
-Roughly 18%% of the data re missing are there any particular predictors that are more likely to be missing? Is the pattern of missing data related to the classes?
+
+Roughly 18%% of the data are missing. Are there any particular predictors that are more likely to be missing? Is the pattern of missing data related to the classes?
+
+
+As seen in the above visual, several of the predictors have a significant number of missing values, including `leaf.halo`, `seed.tmt`, and `fruit.pods`. 
+
+Reviewing the values of `Class` where we see these predictors null the most often, `herbicide-injury`, `diaporthe-pod-&-stem-blight`, `cyst-nematode`, and `2-4-d-injury` are at the top.
 
 ```{r}
-
-```
-
-
-Develop a strategy for handling missing data, either by eliminating predictors or imputation.
-
-```{r}
-
+# Calculate the proportion of nulls for each value of Class
+Soybean %>%
+  mutate(across(everything(), as.character)) %>%
+  pivot_longer(-Class, names_to = "variable", values_to = "level") |> 
+  group_by(Class, variable) %>%
+  summarize(prop_missing = mean(is.na(level))) %>%
+  ggplot(aes(x = Class, y = prop_missing)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  theme_minimal() +
+  coord_flip()+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
 ```
 
 
