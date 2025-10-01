@@ -29,6 +29,7 @@ execute:
 
 # Load required libraries
 library(tidyverse)
+library(fpp3)
 
 # Set default chunk options
 knitr::opts_chunk$set(
@@ -40,5 +41,138 @@ knitr::opts_chunk$set(
 
 # Set ggplot theme
 theme_set(theme_minimal())
+```
+
+## 8.1
+
+Consider the the number of pigs slaughtered in Victoria, available in the aus_livestock dataset.
+
+Use the ETS() function to estimate the equivalent model for simple exponential smoothing. Find the optimal values of α and ℓ0, and generate forecasts for the next four months.
+
+```{r}
+# Filter data
+pigs <- aus_livestock %>%
+  filter(Animal == "Pigs", State == "Victoria") %>%
+  select(Month, Count)
+
+# Fit the model
+fit <- pigs %>%
+  model(ETS(Count ~ error("A") + trend("N") + season("N")))
+
+# Forecast new observations
+fc <- fit |> 
+  forecast(h = 4)
+
+# Plot
+fc |>
+  autoplot(pigs) +
+  geom_line(aes(y = .fitted), col="#D55E00",
+            data = augment(fit))
+
+# Print the components
+print(fit |> tidy())
+```
+
+Compute a 95% prediction interval for the first forecast using $\hat y±1.96s$
+where $s$ is the standard deviation of the residuals. Compare your interval with the interval produced by R.
+
+Our manual prediction, using $\hat{y}_{T+1|T} \pm 1.96s_1$, gives an interval of $[73,984, 110,615]$, compared to the model's $[76,854, 113,518]$. This is quite close, especially considering our manual calculation is quite simple and is only performing a one step forecast (which is also why it is slightly lower; we have less residuals to worry about in a single step).
+
+```{r}
+# Get the last value of the data
+last_pigs <- pigs %>%
+  tail(1) %>%
+  pull(Count)
+
+# Calculate 95% CI interval of residual distribution 
+interval <- c(
+  (last_pigs - 1.96 * sd(residuals(fit)$.resid)),
+  (last_pigs + 1.96 * sd(residuals(fit)$.resid))
+)
+print(interval)
+
+# Pull the innovation residuals 
+model_interval <- fc |> 
+  filter(row_number() == 1) |> 
+  hilo(level = 95) |> 
+  unpack_hilo('95%')
+
+tibble(
+  method = c("Manual", "Model", "Diff"),
+  lower = c(interval[1], model_interval$`95%_lower`, 
+            interval[1] - model_interval$`95%_lower`),
+  upper = c(interval[2], model_interval$`95%_upper`, 
+            interval[2] - model_interval$`95%_upper`),
+)
+```
+
+## 8.5 
+
+Data set global_economy contains the annual Exports from many countries. Select one country to analyse.
+
+- Plot the Exports series and discuss the main features of the data.
+- Use an ETS(A,N,N) model to forecast the series, and plot the forecasts.
+- Compute the RMSE values for the training data.
+- Compare the results to those from an ETS(A,A,N) model. (Remember that the trended model is using one more parameter than the simpler model.) Discuss the merits of the two forecasting methods for this data set.
+- Compare the forecasts from both methods. Which do you think is best?
+- Calculate a 95% prediction interval for the first forecast for each model, using the RMSE values and assuming normal errors. Compare your intervals with those produced using R.
+
+
+```{r}
+# Filter data for a specific country
+
+canada <- global_economy %>%
+  filter(Country == "Canada") %>%
+  select(Year, Exports)
+
+autoplot(canada, Exports) +
+  labs(title = "Annual Exports from Canada",
+       y = "Exports (in million USD)",
+       x = "Year")
+
+canada_fit  <- canada %>%
+  model(ETS(Exports ~ error("A") + trend("N") + season("N")))
+
+```
+
+## 8.6
+
+Forecast the Chinese GDP from the global_economy data set using an ETS model. Experiment with the various options in the ETS() function to see how much the forecasts change with damped trend, or with a Box-Cox transformation. Try to develop an intuition of what each is doing to the forecasts.
+
+[Hint: use a relatively large value of h when forecasting, so you can clearly see the differences between the various options when plotting the forecasts.]
+
+```{r}
+
+```
+
+## 8.7
+
+Find an ETS model for the Gas data from aus_production and forecast the next few years. Why is multiplicative seasonality necessary here? Experiment with making the trend damped. Does it improve the forecasts?
+
+```{r}
+
+```
+
+## 8.8
+
+Recall your retail time series data (from Exercise 7 in Section 2.10).
+
+- Why is multiplicative seasonality necessary for this series?
+- Apply Holt-Winters’ multiplicative method to the data. Experiment with making the trend damped.
+- Compare the RMSE of the one-step forecasts from the two methods. Which do you prefer?
+- Check that the residuals from the best method look like white noise.
+- Now find the test set RMSE, while training the model to the end of 2010. Can you beat the seasonal naïve approach from Exercise 7 in Section 5.11?
+
+
+```{r}
+
+```
+
+## 8.9
+
+For the same retail data, try an STL decomposition applied to the Box-Cox transformed series, followed by ETS on the seasonally adjusted data. How does that compare with your best previous forecasts on the test set?
+
+```{r}
+
 ```
 
