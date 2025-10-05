@@ -6,13 +6,13 @@ date: today
 date-format: "MMMM D, YYYY"
 format: 
   pdf:
-    toc: true
-    number-sections: true
+    toc: false
+    number-sections: false
     colorlinks: true
   html:
-    toc: true
+    toc: false
     toc-depth: 3
-    number-sections: true
+    number-sections: false
     code-fold: false
     theme: cosmo
     embed-resources: true
