@@ -75,7 +75,33 @@ ATM 1 and 2 demonstrate large variances of cash balances through the series, pre
 autoplot(atm_data |> filter(ATM != "ATM4"))
 ```
 
-Given the differences, we will model each ATM separately.
+Given the differences, and assuming there's real business reasons behind them, we will model each ATM separately.
+
+### ATM 1
+
+- Variance is stable
+- High seasonality
+- No real trend to speak of
+
+```{r}
+# Check for nulls in the time series
+atm_data |> 
+  filter(is.na(DATE))
+```
+
+```{r}
+atm1 <- atm_data |> filter(ATM == "ATM1")
+autoplot(atm1)
+
+atm1_fit <- atm1 |> 
+  model(
+    mean = MEAN(Cash),
+    snaive = SNAIVE(Cash),
+    ets = ETS(Cash),
+    arima = ARIMA(Cash)
+  )
+```
+
 
 
 ## Part B - Forecasting Power
