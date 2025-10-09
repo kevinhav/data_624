@@ -1,0 +1,96 @@
+---
+title: "Project 1"
+subtitle: "DATA 624"
+author: "Kevin Havis"
+date: today
+date-format: "MMMM D, YYYY"
+format: 
+  pdf:
+    toc: false
+    number-sections: false
+    colorlinks: true
+  html:
+    toc: false
+    toc-depth: 3
+    number-sections: false
+    code-fold: false
+    theme: cosmo
+    embed-resources: true
+execute:
+  warning: false
+  message: false
+  echo: true
+  cache: false
+---
+
+```{r}
+#| label: setup
+#| include: false
+
+# Load required libraries
+library(tidyverse)
+library(fpp3)
+library(knitr)
+
+# Set default chunk options
+knitr::opts_chunk$set(
+  fig.width = 8,
+  fig.height = 6,
+  fig.align = "center",
+  out.width = "80%"
+)
+
+# Set ggplot theme
+theme_set(theme_minimal())
+```
+
+# Project 1
+
+## Part A - ATM Forecast
+
+### Exploratory Data Analysis
+
+Examining the data, I see several entries with missing values. Assuming these are the intended forecast periods, I will remove them from the raw data.
+
+Plotting the remaining series, we have four ATMs. Of particular note is "ATM 4", which seems to generally have much higher levels than the others, including a massive outlier.
+
+
+```{r}
+# Read in ATM data
+atm_data <- readxl::read_excel("ATM624Data.xlsx") |> 
+  as_tsibble(index=DATE, key=ATM) |> 
+  drop_na()
+
+autoplot(atm_data)
+
+```
+
+We temporarily remove ATM 4 in order to more clearly see the series of the remaining three.
+
+ATM 3 also appears to be unusual, with zero balances through most the time series, then a sudden spike near the end.
+
+ATM 1 and 2 demonstrate large variances of cash balances through the series, presumably showing the ATM's cash reserves gradually being drawn down, then suddenly replenished.
+
+```{r}
+autoplot(atm_data |> filter(ATM != "ATM4"))
+```
+
+Given the differences, we will model each ATM separately.
+
+
+## Part B - Forecasting Power
+
+```{r}
+# Read in power data
+atm_data <- read_excel("ResidentialCustomerForecastLoad-624.xlsx")
+
+
+```
+
+## Part C - Waterflow Pipes
+
+```{r}
+pipe1 <- read_excel("Waterflow_Pipe1.xlsx")
+pipe2 <- read_excel("Waterflow_Pipe2.xlsx")
+```
+
