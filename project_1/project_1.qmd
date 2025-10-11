@@ -31,6 +31,7 @@ execute:
 library(tidyverse)
 library(fpp3)
 library(knitr)
+#library(urca)
 
 # Set default chunk options
 knitr::opts_chunk$set(
@@ -50,7 +51,7 @@ theme_set(theme_minimal())
 
 ### Exploratory Data Analysis
 
-Examining the data, I see several entries with missing values. Assuming these are the intended forecast periods, I will remove them from the raw data.
+Examining the data, I see several entries with missing values at the end of the time series. Assuming these are the intended forecast periods, I will remove them from the raw data.
 
 Plotting the remaining series, we have four ATMs. Of particular note is "ATM 4", which seems to generally have much higher levels than the others, including a massive outlier.
 
@@ -58,6 +59,7 @@ Plotting the remaining series, we have four ATMs. Of particular note is "ATM 4",
 ```{r}
 # Read in ATM data
 atm_data <- readxl::read_excel("ATM624Data.xlsx") |> 
+  mutate(DATE = as.Date(DATE, origin = "1899-12-30")) |>
   as_tsibble(index=DATE, key=ATM) |> 
   drop_na()
 
@@ -82,25 +84,287 @@ Given the differences, and assuming there's real business reasons behind them, w
 - Variance is stable
 - High seasonality
 - No real trend to speak of
+- Gaps in time series, need to fill
+  - Since the data is very seasonal, use snaive to fill gaps
+   - Use 7 days based on ACF plot
+
 
 ```{r}
-# Check for nulls in the time series
-atm_data |> 
-  filter(is.na(DATE))
-```
+#| label: Preprocessing and imputation
 
-```{r}
-atm1 <- atm_data |> filter(ATM == "ATM1")
-autoplot(atm1)
+# Get ATM 1 data
+atm1 <- atm_data |>
+  filter(ATM == "ATM1") 
 
-atm1_fit <- atm1 |> 
-  model(
-    mean = MEAN(Cash),
-    snaive = SNAIVE(Cash),
-    ets = ETS(Cash),
-    arima = ARIMA(Cash)
+# Impute simple mean so we can check ACF
+atm1_fillmean <- atm1 |> 
+  fill_gaps(Cash = mean(Cash, na.rm = TRUE)) 
+  
+# Check what seasonality to impute on
+atm1_fillmean |> 
+  ACF(Cash) |> 
+  autoplot() +
+  scale_x_continuous(breaks = seq(0, 50, by = 1)) +
+  labs(
+    title = "ATM 1 ACF w/ Simple Mean Imputation",
+    y = "Cash Balance",
+    x = "Date"
   )
+
+# Fill gaps using seasonal naive lag = 7
+# We do this manually because snaive can't fit with gaps
+atm1_filled <- atm1 %>%
+  fill_gaps() %>%
+  group_by_key() %>%
+  mutate(Cash = if_else(is.na(Cash), lag(Cash, 7), Cash)) %>%
+  ungroup()
+
+# Confirm gaps are fixed
+scan_gaps(atm1_filled) # should be empty
 ```
+
+ - We select several models that can deal with the seasonality
+ - ARIMA has the best MASE for the point estimate
+ 
+
+```{r}
+atm1_fit <- atm1_filled |> 
+  #mutate(Cash = difference(Cash, lag=7)) |>
+  model(arima = ARIMA(Cash ~ PDQ(period = 7)),
+        snaive = SNAIVE(Cash ~ lag("week")),
+        snaive_drift = SNAIVE(Cash ~ drift()),
+        ets = ETS(Cash))
+
+atm1_fit |> 
+  select(arima) |>
+  gg_tsresiduals() + labs(title="ARIMA")
+
+atm1_fit |>
+  select(snaive) |> 
+  gg_tsresiduals() + labs(title="SNAIVE")
+
+atm1_fit |>
+  select(snaive_drift) |> 
+  gg_tsresiduals() + labs(title="Drift")
+
+atm1_fit |>
+  select(ets) |> 
+  gg_tsresiduals() + labs(title="ETS")
+
+atm1_fit |> 
+  accuracy() |> 
+  kable(caption="ATM 1 Point Estimate Accur acy")
+```
+ - Forecasting out 14 days, training on ~90% of the data
+ - ARIMA has the best point forecast, but ETS has the best MASE on the test data
+ - We should prefer ETS due to simplicity and explainability of the model, which makes sense given how consistent the series is
+ 
+
+```{r}
+# Split the data into train and test
+atm1_train <- atm1_filled |> filter_index(. ~ "2010-03-31")
+atm1_test <- atm1_filled |> filter_index("2010-04-01" ~ .)
+
+# Refit models on training data
+atm1_fit_train <- atm1_train |>
+  model(arima = ARIMA(Cash),
+        snaive = SNAIVE(Cash ~ lag("week")),
+        snaive_drift = SNAIVE(Cash ~ drift()),
+        ets = ETS(Cash))
+
+# Forecast on test data
+atm1_fc <- atm1_fit_train |>
+  forecast(h = "14 days")
+
+# Plot forecasts against test data
+atm1_fc |>
+  autoplot(atm1_test) +
+  labs(title = "ATM 1 Forecast vs Actuals",
+       y = "Cash Balance",
+       x = "Date")
+
+# Check accuracy on test data
+atm1_fc |>
+  accuracy(bind_rows(atm1_train, atm1_test)) |> 
+  kable(caption="ATM 1 Test Accuracy")
+```
+
+### ATM 2
+
+- We'll perform similar steps for ATM 2
+- Using `imputeTS` library going forward for missing dates
+- Can't use MPE or MAPE due to zero levels for some observations
+- ARIMA again has best point accuracy
+- ETS and ARIMA perform well, but ETS performs slightly better and is simpler
+
+
+```{r}
+library(imputeTS)
+
+atm_data <- atm_data |> 
+  group_by(ATM) |> 
+  fill_gaps() |> 
+  mutate(Cash = na_interpolation(Cash, option = "linear")) |> 
+  ungroup()
+```
+
+
+```{r}
+#| label: Preprocessing and imputation ATM2
+# Get ATM 2 data
+atm2 <- atm_data |>
+  filter(ATM == "ATM2")
+
+autoplot(atm2)
+
+atm2_fit <- atm2 |> 
+  model(
+    arima = ARIMA(Cash),
+    snaive = SNAIVE(Cash ~ lag("week")),
+    snaive_drift = SNAIVE(Cash ~ drift()),
+    ets = ETS(Cash)
+  )
+
+atm2_fit |> 
+  select(arima) |>
+  gg_tsresiduals() + labs(title = "ARIMA - ATM2")
+
+atm2_fit |>
+  select(snaive) |> 
+  gg_tsresiduals() + labs(title = "SNAIVE - ATM2")
+
+atm2_fit |>
+  select(snaive_drift) |> 
+  gg_tsresiduals() + labs(title = "Drift - ATM2")
+
+atm2_fit |>
+  select(ets) |> 
+  gg_tsresiduals() + labs(title = "ETS - ATM2")
+
+atm2_fit |> 
+  accuracy() |> 
+  kable(caption="ATM 2 Point Estimate Accuracy")
+```
+```{r}
+# Split the data into train and test
+atm2_train <- atm2_filled |> filter_index(. ~ "2010-03-31")
+atm2_test <- atm2_filled |> filter_index("2010-04-01" ~ .)
+
+# Refit models on training data
+atm2_fit_train <- atm2_train |>
+  model(arima = ARIMA(Cash),
+        snaive = SNAIVE(Cash ~ lag("week")),
+        snaive_drift = SNAIVE(Cash ~ drift()),
+        ets = ETS(Cash))
+
+# Forecast on test data
+atm2_fc <- atm2_fit_train |>
+  forecast(h = "21 days")
+
+# Plot forecasts against test data
+atm2_fc |>
+  autoplot(atm2_test) +
+  labs(title = "ATM 2 Forecast vs Actuals",
+       y = "Cash Balance",
+       x = "Date")
+
+# Check accuracy on test data
+atm2_fc |>
+  accuracy(bind_rows(atm2_train, atm2_test)) |> 
+  kable(caption="ATM 2 Test Accuracy")
+```
+
+### ATM 3
+
+ATM 3 is unique in that it appears to be a new machine, or perhaps recently reinstated, given the data has zero balances until the last three days of the series.
+
+With such limited data, we really can't develop a proper model. From a pure business perspective, we could use the domain knowledge we have about the machine to find a similar machine with more data, and use that to guide our forecasts.
+
+For this exercise, we will simply use a naive random walk to model future balances.
+
+
+```{r}
+#| label: Preprocessing and imputation ATM3
+# Get ATM 3 data
+atm3 <- atm_data |>
+  filter(ATM == "ATM3")
+
+autoplot(atm3)
+
+atm3_fit <- atm3 |> 
+  model(RW(Cash))
+
+# Forecast on test data
+atm3_fc <- atm3_fit |>
+  forecast(h = "7 days")
+
+atm3_fc |>  
+  autoplot(atm3) +
+  labs(title = "ATM 3 Naive Forecast vs Actuals")
+```
+
+### ATM 4
+
+- Significant outlier in a relatively stable series
+- We will impute the outlier using linear interpolation
+
+```{r}
+# Get ATM 4 data
+atm4 <- atm_data |>
+  filter(ATM == "ATM4")
+autoplot(atm4)
+
+# Find the outlier
+atm4 |> 
+  slice_max(Cash, n=1)
+
+# Check around the observation
+atm4 |> 
+  filter_index("2010-02-07" ~ "2010-02-12") |> 
+  kable(caption="ATM 4 Outlier on 2010-02-09")
+
+# Impute the outlier using linear interpolation
+atm4 <- atm4 |>
+  mutate(Cash = if_else(DATE == as.Date("2010-02-09"), NA_real_, Cash)) |> 
+  mutate(Cash = na_interpolation(Cash, option = "linear"))
+
+# Check
+autoplot(atm4) +
+  labs(title="ATM 4 After Outlier Imputation")
+```
+```{r}
+# Split data
+atm4_train <- atm4 |> filter_index(. ~ "2010-03-31")
+atm4_test <- atm4 |> filter_index("2010-04-01" ~ .)
+
+# Fit models on training data
+atm4_fit_train <- atm4_train |>
+  model(
+    arima = ARIMA(Cash),
+    snaive = SNAIVE(Cash ~ lag("week")),
+    snaive_drift = SNAIVE(Cash ~ drift()),
+    ets = ETS(Cash)
+  )
+
+# Forecast on test data
+atm4_fc <- atm4_fit_train |>
+  forecast(h = "21 days")
+
+# Plot forecasts against test data
+atm4_fc |>
+  autoplot(atm4_test) +
+  labs(
+    title = "ATM 4 Forecast vs Actuals",
+    y = "Cash Balance",
+    x = "Date"
+  )
+
+# Check accuracy on test data
+atm4_fc |>
+  accuracy(bind_rows(atm4_train, atm4_test)) |>
+  kable(caption = "ATM 4 Test Accuracy")
+```
+
 
 
 
@@ -119,4 +383,3 @@ atm_data <- read_excel("ResidentialCustomerForecastLoad-624.xlsx")
 pipe1 <- read_excel("Waterflow_Pipe1.xlsx")
 pipe2 <- read_excel("Waterflow_Pipe2.xlsx")
 ```
-
