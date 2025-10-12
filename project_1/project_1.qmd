@@ -77,7 +77,7 @@ ATM 1 and 2 demonstrate large variances of cash balances through the series, pre
 autoplot(atm_data |> filter(ATM != "ATM4"))
 ```
 
-Given the differences, and assuming there's real business reasons behind them, we will model each ATM separately.
+Given the differences, and assuming there's real business reasons behind them, we will analyze and model each ATM separately.
 
 ### ATM 1
 
@@ -215,7 +215,8 @@ atm_data <- atm_data |>
 atm2 <- atm_data |>
   filter(ATM == "ATM2")
 
-autoplot(atm2)
+autoplot(atm2) +
+  labs(title="ATM 2 After Linear Interpolation")
 
 atm2_fit <- atm2 |> 
   model(
@@ -332,6 +333,10 @@ atm4 <- atm4 |>
 autoplot(atm4) +
   labs(title="ATM 4 After Outlier Imputation")
 ```
+
+- With the outlier interpolated, we can proceed to modeling
+- For this time series, seasonal naive with drift performs the best
+
 ```{r}
 # Split data
 atm4_train <- atm4 |> filter_index(. ~ "2010-03-31")
@@ -364,8 +369,6 @@ atm4_fc |>
   accuracy(bind_rows(atm4_train, atm4_test)) |>
   kable(caption = "ATM 4 Test Accuracy")
 ```
-
-
 
 
 ## Part B - Forecasting Power

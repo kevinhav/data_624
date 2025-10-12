@@ -1,0 +1,46 @@
+---
+title: "Homework 5"
+subtitle: "DATA 624"
+author: "Kevin Havis"
+date: today
+date-format: "MMMM D, YYYY"
+format: 
+  pdf:
+    toc: false
+    number-sections: false
+    colorlinks: true
+  html:
+    toc: false
+    toc-depth: 3
+    number-sections: false
+    code-fold: false
+    theme: cosmo
+    embed-resources: true
+execute:
+  warning: false
+  message: false
+  echo: true
+  cache: false
+---
+
+
+```{r}
+#| label: setup
+#| include: false
+
+# Load required libraries
+library(tidyverse)
+library(fpp3)
+library(knitr)
+
+# Set default chunk options
+knitr::opts_chunk$set(
+  fig.width = 8,
+  fig.height = 6,
+  fig.align = "center",
+  out.width = "80%"
+)
+
+# Set ggplot theme
+theme_set(theme_minimal())
+```
