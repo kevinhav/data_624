@@ -44,3 +44,108 @@ knitr::opts_chunk$set(
 # Set ggplot theme
 theme_set(theme_minimal())
 ```
+
+Here's your formatted content with alphabetical bullets converted to markdown headings:
+
+## 9.1
+
+### a. Differences among figures and white noise indication
+Explain the differences among these figures. Do they all indicate that the data are white noise?
+
+### b. Critical values and autocorrelations variation
+Why are the critical values at different distances from the mean of zero? Why are the autocorrelations different in each figure when they each refer to white noise?
+
+## 9.2
+
+A classic example of a non-stationary series are stock prices. Plot the daily closing prices for Amazon stock (contained in gafa_stock), along with the ACF and PACF. Explain how each plot shows that the series is non-stationary and should be differenced.
+
+## 9.3
+
+For the following series, find an appropriate Box-Cox transformation and order of differencing in order to obtain stationary data.
+
+### a. Turkish GDP
+Turkish GDP from global_economy.
+
+### b. Accommodation takings in Tasmania
+Accommodation takings in the state of Tasmania from aus_accommodation.
+
+### c. Monthly sales from souvenirs
+Monthly sales from souvenirs.
+
+## 9.5
+
+For your retail data (from Exercise 7 in Section 2.10), find the appropriate order of differencing (after transformation if necessary) to obtain stationary data
+
+## 9.6
+
+Simulate and plot some data from simple ARIMA models.
+
+### a. Generate AR(1) data
+Use the following R code to generate data from an AR(1) model with ϕ₁=0.6 and σ²=1. The process starts with y₁=0.
+
+```r
+y <- numeric(100)
+e <- rnorm(100)
+for(i in 2:100)
+  y[i] <- 0.6*y[i-1] + e[i]
+sim <- tsibble(idx = seq_len(100), y = y, index = idx)
+```
+
+### b. Time plot and parameter sensitivity
+Produce a time plot for the series. How does the plot change as you change ϕ₁?
+
+### c. Generate MA(1) data
+Write your own code to generate data from an MA(1) model with θ₁=0.6 and σ²=1.
+
+### d. MA(1) time plot and parameter sensitivity
+Produce a time plot for the series. How does the plot change as you change θ₁?
+
+### e. Generate ARMA(1,1) data
+Generate data from an ARMA(1,1) model with ϕ₁=0.6, θ₁=0.6 and σ²=1.
+
+### f. Generate AR(2) data
+Generate data from an AR(2) model with ϕ₁=−0.8, ϕ₂=0.3 and σ²=1. (Note that these parameters will give a non-stationary series.)
+
+### g. Compare ARMA and AR(2) series
+Graph the latter two series and compare them.
+
+## 9.7
+
+Consider aus_airpassengers, the total number of passengers (in millions) from Australian air carriers for the period 1970-2011.
+
+### a. Find and validate ARIMA model
+Use ARIMA() to find an appropriate ARIMA model. What model was selected. Check that the residuals look like white noise. Plot forecasts for the next 10 periods.
+
+### b. Backshift operator notation
+Write the model in terms of the backshift operator.
+
+### c. Compare with ARIMA(0,1,0) with drift
+Plot forecasts from an ARIMA(0,1,0) model with drift and compare these to part a.
+
+### d. Compare with ARIMA(2,1,2) with and without drift
+Plot forecasts from an ARIMA(2,1,2) model with drift and compare these to parts a and c. Remove the constant and see what happens.
+
+### e. ARIMA(0,2,1) with constant forecasts
+Plot forecasts from an ARIMA(0,2,1) model with a constant. What happens?
+
+## 9.8
+
+For the United States GDP series (from global_economy):
+
+### a. Box-Cox transformation
+If necessary, find a suitable Box-Cox transformation for the data;
+
+### b. Fit ARIMA model
+Fit a suitable ARIMA model to the transformed data using ARIMA();
+
+### c. Experiment with alternative models
+Try some other plausible models by experimenting with the orders chosen;
+
+### d. Select best model and check diagnostics
+Choose what you think is the best model and check the residual diagnostics;
+
+### e. Produce and evaluate forecasts
+Produce forecasts of your fitted model. Do the forecasts look reasonable?
+
+### f. Compare with ETS model
+Compare the results with what you would obtain using ETS() (with no transformation).
