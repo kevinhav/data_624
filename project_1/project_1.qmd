@@ -373,12 +373,145 @@ atm4_fc |>
 
 ## Part B - Forecasting Power
 
+- The series is relatively consistent except for two outliers
+- One outlier is an order of magnitude lower than the rest of the data
+  - We can simply raise it by a factor of 10 to impute it
+- The other is simply missing
+  - Visually it is similar to previous season
+  - We should use seasonaly imputation to fill it
+- We impute for model training, but should note it in the analysis
+
+
 ```{r}
 # Read in power data
-atm_data <- read_excel("ResidentialCustomerForecastLoad-624.xlsx")
+power <- readxl::read_excel("ResidentialCustomerForecastLoad-624.xlsx") |> 
+  mutate(date = yearmonth(`YYYY-MMM`)) |>
+  select(-`YYYY-MMM`) |>
+  as_tsibble(index=date)
 
+autoplot(power, KWH)
+
+# Check for gaps in series
+scan_gaps(power) # should be empty
+
+# Check for null values
+power |> 
+  filter(is.na(KWH)) # 2008 Sep is missing
+
+# Check the min outlier
+power |> 
+  slice_min(KWH, n=1)
+
+# Check around the outlier on July 2010
+power |> 
+  filter_index("2010-06" ~ "2010-08") |> 
+  kable(caption="Power Consumption Around July 2010 Outlier")
+```
+
+
+```{r}
+# Impute low outlier by raising it by a factor of 10
+power_imp <- power |>
+  mutate(KWH = if_else(date == yearmonth("2010 Jul"), KWH * 10, KWH))
+autoplot(power_imp, KWH) +
+  labs(title="Power Consumption After Outlier Imputation")
+```
+```{r}
+# Impute missing outlier using seasonal naive lag = 12
+power_imp <- power_imp |>
+  fill_gaps() |>
+  mutate(KWH = if_else(is.na(KWH), lag(KWH, 12), KWH))
+
+# Check September 2008 and surrounding obs
+power_imp |> 
+      filter(date %in% c(
+        yearmonth("2007 Sep"), 
+        yearmonth("2006 Sep"), 
+        yearmonth("2009 Sep")
+      )) |>
+  kable(caption = "Power Consumption After Missing Value Imputation")
 
 ```
+
+- With the outliers handled, we can proceed to modeling
+- Very seasonal data so we will try a few seasonal models
+- Slight trend upwards overtime
+
+```{r}
+power_fit <- power_imp |> 
+  model(
+    arima = ARIMA(KWH),
+    snaive = SNAIVE(KWH ~ lag("year")),
+    snaive_drift = SNAIVE(KWH ~ drift()),
+    ets = ETS(KWH)
+  )
+
+# Forecast through 2014
+
+power_fc <- power_fit |>
+  forecast(h = 12)
+
+
+# Visually Check
+power_fc |>  
+  autoplot(power_imp) +
+  coord_cartesian(xlim = c(yearmonth("2012 Jan"), yearmonth("2014 Dec"))) +
+  labs(title = "Power Consumption Forecast vs Actuals",
+       y = "KWH",
+       x = "Date")
+```
+
+- Visually all of these models seem to fit well
+- Let's check the accuracy metrics to choose the best one
+
+```{r}
+power_fit |> 
+  accuracy() |> 
+  kable(caption="Power Consumption Point Estimate Accuracy")
+
+power_fit |> 
+  select(arima)
+```
+
+- ARIMA with (0,0,4) and seasonal component (2,1,0) with drift has been chosen
+- This seems reasonable; stationary series, very little autoregressive behavior, but some moving average components to smooth out noise
+  - The drift address the slightly upwards trend over time
+  - The seasonal component captures the yearly seasonality
+- Let's test these models on a train/test split to see if they hold up
+
+```{r}
+# Split the data into train and test
+power_train <- power_imp |> filter_index(. ~ "2011 Dec")
+power_test <- power_imp |> filter_index("2012 Jan" ~ .)
+# Refit models on training data
+power_fit_train <- power_train |> 
+  model(
+    arima = ARIMA(KWH),
+    snaive = SNAIVE(KWH ~ lag("year")),
+    snaive_drift = SNAIVE(KWH ~ drift()),
+    ets = ETS(KWH),
+  )
+
+# Forecast on test data
+power_fc <- power_fit_train |>
+  forecast(h = 24)
+
+# Plot forecasts against test data
+power_fc |>  autoplot(power_test) +
+  labs(title = "Power Consumption Forecast vs Actuals",
+       y = "KWH",
+       x = "Date")
+
+# Check accuracy
+power_fc |>
+  accuracy(bind_rows(power_train, power_test)) |> 
+  kable(caption="Power Consumption Test Accuracy")
+```
+
+- ARIMA still holds out as the best model on the test data
+- We would only wish to use another model for simplicity
+- Again, we should note the imputation steps taken in the analysis
+
 
 ## Part C - Waterflow Pipes
 
