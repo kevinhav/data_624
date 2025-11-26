@@ -12,25 +12,25 @@ editor:
 ---
 
 ```{r}
-#| label: setup
+library(readxl)
 library(tidyverse)
 library(randomForest)
 library(xgboost)
 library(kableExtra)
+library(caret)
+library(caretEnsemble)
 ```
 
 ## Executive Summary
 
-This report documents the development and validation of a predictive
-model for pH levels in ABC Beverage's manufacturing process. Multiple
-modeling approaches were evaluated, and a Random Forest model was
-selected based on predictive accuracy and interpretability.
+This report documents the development and validation of a predictive model for pH levels in ABC Beverage's manufacturing process. Multiple modeling approaches were evaluated, and a Random Forest model was selected based on predictive accuracy and interpretability, achieving a $R^2$ of ~69% on cross fold validation training sets.
 
 ------------------------------------------------------------------------
 
 ## Load Data
 
 ```{r}
+# Update these paths if necessary
 train_data <- read_excel("data/train_data.xlsx")
 test_data <- read_excel("data/test_data.xlsx")
 test_data <- test_data %>% select(-PH) # Remove empty PH column
@@ -103,35 +103,34 @@ test_data <- clean_data(test_data)
 ## Modeling
 
 ```{r}
-# Helper to compute metrics
-calc_metrics <- function(actual, predicted, model_name) {
+# Cross-validation setup
+ctrl <- trainControl(
+  method = "cv", 
+  number = 5, 
+  index = createFolds(train_data$PH, k = 5, returnTrain = TRUE)
+)
 
-tibble(
-    model = model_name,
-    rmse = sqrt(mean((actual - predicted)^2)),
-    mae = mean(abs(actual - predicted)),
-    r2 = 1 - sum((actual - predicted)^2) / sum((actual - mean(actual))^2)
+# Train all models with CV
+models <- caretList(
+  PH ~ ., 
+  data = train_data,
+  trControl = ctrl,
+  tuneList = list(
+    lm = caretModelSpec(method = "lm"),
+    dt = caretModelSpec(method = "rpart"),
+    rf = caretModelSpec(method = "rf", importance = TRUE),
+    xgb = caretModelSpec(method = "xgbTree", verbosity = 0)
   )
-}
+)
 
-# Run all models and combine metrics
-run_all_models <- function(data) {
-  results <- list(
-    lm = fit_lm(data),
-    dt = fit_dt(data),
-    rf = fit_rf(data),
-    xgb = fit_xgb(data)
-  )
-  
-  metrics <- bind_rows(
-    results$lm$metrics,
-    results$dt$metrics,
-    results$rf$metrics,
-    results$xgb$metrics
-  )
-  
-  list(models = results, metrics = metrics)
-}
+# Get training set metrics
+train_metrics <- resamples(models) %>%
+    summary() %>%
+    .$statistics %>%
+    map_df(~ as_tibble(.x, rownames = "model"), .id = "metric") %>%
+    filter(metric %in% c("RMSE", "Rsquared", "MAE")) %>%
+    select(metric, model, mean = Mean) %>%
+    pivot_wider(names_from = metric, values_from = mean)
 ```
 
 
@@ -144,32 +143,12 @@ We evaluated three distinct modeling approaches:
 -   **R-Squared:** \[Value\]
 -   **Assessment:** Assumes linear relationships; baseline approach
 
-```{r}
-# 1. Linear Regression
-fit_lm <- function(data) {
-  mod <- lm(PH ~ ., data = data)
-  pred <- predict(mod, data)
-  list(model = mod, metrics = calc_metrics(data$PH, pred, "Linear Regression"))
-}
-```
-
-
 ### 2. Decision Tree
 
 -   **Method:** Single tree with pruning
 -   **RMSE:** \[Value\]
 -   **R-Squared:** \[Value\]
 -   **Assessment:** Captures non-linearities but prone to overfitting
-
-```{r}
-# 2. Decision Tree
-fit_dt <- function(data, cp = 0.01) {
-  mod <- rpart(PH ~ ., data = data, method = "anova", cp = cp)
-  pred <- predict(mod, data)
-  list(model = mod, metrics = calc_metrics(data$PH, pred, "Decision Tree"))
-}
-```
-
 
 ### 3. Random Forest
 
@@ -178,16 +157,6 @@ fit_dt <- function(data, cp = 0.01) {
 -   **R-Squared:** \[Value\]
 -   **Assessment:** Best balance of accuracy and generalization
 
-```{r}
-# 3. Random Forest
-fit_rf <- function(data, ntree = 500) {
-  mod <- randomForest(PH ~ ., data = data, ntree = ntree, importance = TRUE)
-  pred <- predict(mod, data)
-  list(model = mod, metrics = calc_metrics(data$PH, pred, "Random Forest"))
-}
-```
-
-
 ### 4. XGBoost
 
 - **Method**: Gradient boosting with 100 rounds, max depth 6, learning rate 0.1
@@ -195,57 +164,32 @@ fit_rf <- function(data, ntree = 500) {
 - **R-Squared**: [Value]
 - **Assessment**: Powerful ensemble method often achieving top performance on tabular data
 
-```{r}
-# 4. XGBoost
-fit_xgb <- function(data, nrounds = 100, max_depth = 6, eta = 0.1) {
-  x_matrix <- model.matrix(PH ~ . - 1, data = data)
-  y_vector <- data$PH
-  
-  mod <- xgboost(
-    data = x_matrix,
-    label = y_vector,
-    nrounds = nrounds,
-    max_depth = max_depth,
-    eta = eta,
-    objective = "reg:squarederror",
-    verbose = 0
-  )
-  
-  pred <- predict(mod, x_matrix)
-  list(model = mod, metrics = calc_metrics(y_vector, pred, "XGBoost"))
-}
-```
-
 ------------------------------------------------------------------------
 
 ## Model Results (Training)
 
 ```{r}
-train_results <- run_all_models(train_data)
-train_results$metrics |> kable()
+train_metrics |> kable()
 ```
 
-**Model Parameters:** - Number of trees: 500 - Variables tried at each
-split: auto - Random seed: 42 (for reproducibility)
+```{r}
+models$rf$finalModel$ntree
+```
 
 
 ## Model Predictions
 
 ```{r}
 predict_all_models <- function(models, new_data) {
-  # Prepare matrix for XGBoost
-  x_matrix <- model.matrix(~ . - 1, data = new_data)
-  
   tibble(
-    lm = predict(models$lm$model, new_data),
-    dt = predict(models$dt$model, new_data),
-    rf = predict(models$rf$model, new_data),
-    xgb = predict(models$xgb$model, x_matrix)
+    lm = predict(models$lm, new_data),
+    dt = predict(models$dt, new_data),
+    rf = predict(models$rf, new_data),
+    xgb = predict(models$xgb, new_data)
   )
 }
 
-# Tibble of actual predictionis for each model
-predictions <- predict_all_models(train_results$models, test_data)
+predictions <- as_tibble(predict(models, test_data))
 ```
 
 ------------------------------------------------------------------------
@@ -257,21 +201,17 @@ After evaluating all models, the Random Forest model was selected as the
 final model due to its superior performance on training set data, as well as the explainability.
 
 
-**Model Parameters:** - Number of trees: 500 - Variables tried at each
-split: auto - Random seed: 42 (for reproducibility)
-
 ------------------------------------------------------------------------
 
 ## Feature Importance Analysis
 
 ```{r}
-#| label: importance
-
-train_results$models$rf$model$importance %>%
+varImp(models$rf)$importance %>%
   as_tibble(rownames = "feature") %>%
-  select(feature, importance = `%IncMSE`) %>%
+  rename(importance = Overall) %>%
   mutate(importance_scaled = 100 * importance / max(importance)) %>%
-  arrange(desc(importance_scaled))
+  arrange(desc(importance_scaled)) |>
+  kable()
 ```
 
 **Key Findings:** - Top 3 features account for approximately \[%\] of
