@@ -31,6 +31,9 @@ execute:
 library(tidyverse)
 library(fpp3)
 library(knitr)
+library(imputeTS)
+library(writexl)
+
 #library(urca)
 
 # Set default chunk options
@@ -43,11 +46,21 @@ knitr::opts_chunk$set(
 
 # Set ggplot theme
 theme_set(theme_minimal())
+
+exclude_metrics <- c("ME", "MAE", "MPE", "MAPE", "RMSSE")
 ```
 
 # Project 1
 
 ## Part A - ATM Forecast
+
+Our goal is to model and forecast the cash balances of four different ATMs over time.  The data contains daily cash balances for each ATM, with some missing values that need to be addressed.
+
+### Executive Summary
+
+Simpler models appear to work the best for all of these ATMs, likely due to the consistent seasonal patterns in the data. Given the business context, I recommend ETS models for ATM 1 and ATM 2 due to their simplicity, while ATM 4 is best served by a seasonal naive model with drift. ATM 3 does not have sufficient data to train a robust model, so we recommend sourcing data from a similar machine or using a naive random walk until more data is available.
+
+Do note that several missing data observations were found in the data; these were imputed to allow for proper model training, but should be reviewed by domain experts.
 
 ### Exploratory Data Analysis
 
@@ -55,7 +68,7 @@ Examining the data, I see several entries with missing values at the end of the 
 
 Plotting the remaining series, we have four ATMs. Of particular note is "ATM 4", which seems to generally have much higher levels than the others, including a massive outlier.
 
-
+ 
 ```{r}
 # Read in ATM data
 atm_data <- readxl::read_excel("ATM624Data.xlsx") |> 
@@ -63,7 +76,10 @@ atm_data <- readxl::read_excel("ATM624Data.xlsx") |>
   as_tsibble(index=DATE, key=ATM) |> 
   drop_na()
 
-autoplot(atm_data)
+autoplot(atm_data) +
+  labs(title="ATM Cash Balances Over Time",
+       y="Cash Balance",
+       x="Date")
 
 ```
 
@@ -74,23 +90,34 @@ ATM 3 also appears to be unusual, with zero balances through most the time serie
 ATM 1 and 2 demonstrate large variances of cash balances through the series, presumably showing the ATM's cash reserves gradually being drawn down, then suddenly replenished.
 
 ```{r}
-autoplot(atm_data |> filter(ATM != "ATM4"))
+autoplot(atm_data |> filter(ATM != "ATM4")) +
+  labs(title="ATM Cash Balances Over Time (Excluding ATM 4)",
+       y="Cash Balance",
+       x="Date")
 ```
 
 Given the differences, and assuming there's real business reasons behind them, we will analyze and model each ATM separately.
 
 ### ATM 1
 
-- Variance is stable
-- High seasonality
-- No real trend to speak of
-- Gaps in time series, need to fill
-  - Since the data is very seasonal, use snaive to fill gaps
-   - Use 7 days based on ACF plot
+We will walk through the details of our model selection process for ATM 1, then summarize the results for the other ATMs, calling out any specific nuances as we go.
 
+Reviewing the time series for ATM 1, we note the following characteristics:
+
+- Variance is stable over time
+- High degree of seasonality
+- Minimal trend
+- There are gaps in the time series we will need to address
+  - Since the data is very seasonal, we'll simply use the seasonal lag to impute missing values
+  - The seasonality is weekly
+
+We will start by fixing the missing values. As mentioned, seasonal imputation seems reasonable given the consistency of the variance.
 
 ```{r}
-#| label: Preprocessing and imputation
+autoplot(atm_data |> filter(ATM == "ATM1")) +
+  labs(title="ATM 1 Cash Balances Over Time",
+       y="Cash Balance",
+       x="Date")
 
 # Get ATM 1 data
 atm1 <- atm_data |>
@@ -123,8 +150,9 @@ atm1_filled <- atm1 %>%
 scan_gaps(atm1_filled) # should be empty
 ```
 
- - We select several models that can deal with the seasonality
- - ARIMA has the best MASE for the point estimate
+We will select several models that deal with seasonality well and train them. Again, since the series is very consistent, we will compare naive models against something like ARIMA or ETS.
+
+Below are the results of the point forecast for each model. ARIMA outperforms naive models but we will evaluate on a train/test split next.
  
 
 ```{r}
@@ -153,12 +181,16 @@ atm1_fit |>
 
 atm1_fit |> 
   accuracy() |> 
-  kable(caption="ATM 1 Point Estimate Accur acy")
+  select(-all_of(exclude_metrics)) |>
+  kable(caption="ATM 1 Point Estimate Accuracy")
 ```
- - Forecasting out 14 days, training on ~90% of the data
- - ARIMA has the best point forecast, but ETS has the best MASE on the test data
- - We should prefer ETS due to simplicity and explainability of the model, which makes sense given how consistent the series is
- 
+
+Training on 90% of data, we've forecasted out 14 days to compare model performance.
+
+ETS has the best MASE on the test data, and given the simplicity of the model compared to ARIMA, we would prefer it for this series. It also has the advantage of being more explainable to business stakeholders.
+
+**Recommendation for ATM 1: Deploy an ETS model and monitor for drift over time.**
+
 
 ```{r}
 # Split the data into train and test
@@ -186,10 +218,17 @@ atm1_fc |>
 # Check accuracy on test data
 atm1_fc |>
   accuracy(bind_rows(atm1_train, atm1_test)) |> 
+  select(-all_of(exclude_metrics)) |>
   kable(caption="ATM 1 Test Accuracy")
 ```
 
 ### ATM 2
+
+We've taken a similar approach to ATM 2. We should note that we are using linear interpolation for missing values (June 17th 2009 and June 25th 2009) here instead of seasonal naive, as the gaps are small and infrequent, and we have reasonable surrounding observations that allow us to do so.
+
+After imputing and fitting several models, we find ETS performs the best again, with ARIMA close behind.
+
+**Recommendation for ATM 2: Deploy an ETS model and monitor for drift over time.**
 
 - We'll perform similar steps for ATM 2
 - Using `imputeTS` library going forward for missing dates
@@ -199,8 +238,18 @@ atm1_fc |>
 
 
 ```{r}
-library(imputeTS)
+# Check for gaps
+scan_gaps(atm_data |> filter(ATM == "ATM2")) # should be empty
 
+# Check surrounding dates
+atm_data |> 
+  filter(ATM == "ATM2") |>
+  filter_index("2009-06-17" ~ "2009-06-25") |> 
+  kable(caption="ATM 2 Around Missing Values")
+```
+
+
+```{r}
 atm_data <- atm_data |> 
   group_by(ATM) |> 
   fill_gaps() |> 
@@ -244,12 +293,13 @@ atm2_fit |>
 
 atm2_fit |> 
   accuracy() |> 
+  select(-all_of(exclude_metrics)) |>
   kable(caption="ATM 2 Point Estimate Accuracy")
 ```
 ```{r}
 # Split the data into train and test
-atm2_train <- atm2_filled |> filter_index(. ~ "2010-03-31")
-atm2_test <- atm2_filled |> filter_index("2010-04-01" ~ .)
+atm2_train <- atm2 |> filter_index(. ~ "2010-03-31")
+atm2_test <- atm2 |> filter_index("2010-04-01" ~ .)
 
 # Refit models on training data
 atm2_fit_train <- atm2_train |>
@@ -271,7 +321,8 @@ atm2_fc |>
 
 # Check accuracy on test data
 atm2_fc |>
-  accuracy(bind_rows(atm2_train, atm2_test)) |> 
+  accuracy(bind_rows(atm2_train, atm2_test)) |>
+  select(-all_of(exclude_metrics)) |>
   kable(caption="ATM 2 Test Accuracy")
 ```
 
@@ -281,7 +332,9 @@ ATM 3 is unique in that it appears to be a new machine, or perhaps recently rein
 
 With such limited data, we really can't develop a proper model. From a pure business perspective, we could use the domain knowledge we have about the machine to find a similar machine with more data, and use that to guide our forecasts.
 
-For this exercise, we will simply use a naive random walk to model future balances.
+Until additional data is available, we will simply use a naive random walk to model future balances. 
+
+**Recommendation for ATM 3: Source data for similar machine and model. Alternatively, deploy naive random walk until sufficient data to train a more robust model.**
 
 
 ```{r}
@@ -306,14 +359,21 @@ atm3_fc |>
 
 ### ATM 4
 
-- Significant outlier in a relatively stable series
-- We will impute the outlier using linear interpolation
+We see an outlier that is orders of magnitude larger than the rest of the ATM data collectively. This value is likely erroneous, as it is unlikely that a single ATM would hold such a large cash balance.
+
+Again, since we have surrounding data, we will linearly impute the outlier and proceed with modeling.
+
+Seasonal naive, both with and without drift, performed very well with this series, the drift constant slightly improving MASE scores. As a high-performing simple model, it is a straightforward choice. We recommend the drift model to allow for better long-term forecasting in case any trend begins to appear.
+
+**Recommendation for ATM 4: Deploy a seasonal naive model with drift**
+
 
 ```{r}
 # Get ATM 4 data
 atm4 <- atm_data |>
   filter(ATM == "ATM4")
-autoplot(atm4)
+autoplot(atm4) +
+  labs(title="ATM 4 WIth Outlier")
 
 # Find the outlier
 atm4 |> 
@@ -333,9 +393,6 @@ atm4 <- atm4 |>
 autoplot(atm4) +
   labs(title="ATM 4 After Outlier Imputation")
 ```
-
-- With the outlier interpolated, we can proceed to modeling
-- For this time series, seasonal naive with drift performs the best
 
 ```{r}
 # Split data
@@ -367,6 +424,7 @@ atm4_fc |>
 # Check accuracy on test data
 atm4_fc |>
   accuracy(bind_rows(atm4_train, atm4_test)) |>
+  select(-all_of(exclude_metrics)) |>
   kable(caption = "ATM 4 Test Accuracy")
 ```
 
@@ -467,6 +525,7 @@ power_fc |>
 ```{r}
 power_fit |> 
   accuracy() |> 
+  select(-all_of(exclude_metrics)) |>
   kable(caption="Power Consumption Point Estimate Accuracy")
 
 power_fit |> 
@@ -505,6 +564,7 @@ power_fc |>  autoplot(power_test) +
 # Check accuracy
 power_fc |>
   accuracy(bind_rows(power_train, power_test)) |> 
+  select(-all_of(exclude_metrics)) |>
   kable(caption="Power Consumption Test Accuracy")
 ```
 
@@ -515,7 +575,146 @@ power_fc |>
 
 ## Part C - Waterflow Pipes
 
+Part C consists of two data sets.  These are simple 2 columns sets, however they have different time stamps.  Your optional assignment is to time-base sequence the data and aggregate based on hour (example of what this looks like, follows).  Note for multiple recordings within an hour, take the mean.  Then to determine if the data is stationary and can it be forecast.  If so, provide a week forward forecast and present results via Rpubs and .rmd and the forecast in an Excel readable file.
+
+I took the below steps to model this series;
+
+- We replace multiple recordings within an hour by the mean
+- We aggregate the data, effectively extending the series
+- Observe Data is not stationary
+- BoxCox has small effect but does normalize the variance, so we will use it
+- The series is made stationary with a seasonal difference of lag 2 based on the two day correlation we saw
+- We now model on the preprocessed data as a train / test split
+- Checking the residuals, they are white noise
+- Proceed to forecast
+- Calculate accuracy metrics
+
+By spending time preprocessing the data to make it stationary, we were able to train an ARIMA model to forecast the next seven days with a MASE of 0.5229456, which is decent performance for a limited training set.
+
 ```{r}
-pipe1 <- read_excel("Waterflow_Pipe1.xlsx")
-pipe2 <- read_excel("Waterflow_Pipe2.xlsx")
+pipe1 <- readxl::read_excel("Waterflow_Pipe1.xlsx") |> 
+  mutate(datetime = as.POSIXct(`Date Time` * 86400, origin = "1899-12-30", tz = "UTC"),
+         datetime_hour = floor_date(datetime, "hour")) |> 
+  group_by(datetime_hour) |> 
+  summarize(WaterFlow = mean(WaterFlow, na.rm = TRUE))
+
+pipe1_ts <- pipe1 |> 
+  as_tsibble(index = datetime_hour)
+
+pipe2 <- readxl::read_excel("Waterflow_Pipe2.xlsx") |> 
+  mutate(datetime = as.POSIXct(`Date Time` * 86400, origin = "1899-12-30", tz = "UTC"),
+         datetime_hour = floor_date(datetime, "hour")) |> 
+  group_by(datetime_hour) |> 
+  summarize(WaterFlow = mean(WaterFlow, na.rm = TRUE))
+
+pipe2_ts <- pipe2 |> 
+  as_tsibble(index = datetime_hour)
+
+autoplot(pipe1_ts, WaterFlow) +
+  labs(title = "Water Flow Pipe 1", y = "Water Flow", x = "Date") 
+
+autoplot(pipe2_ts, WaterFlow) +
+  labs(title = "Water Flow Pipe 2", y = "Water Flow", x = "Date")
+
+# Combine the data, taking the mean if there's overlap
+pipes_combined <- full_join(pipe1_ts, pipe2_ts, by = "datetime_hour", suffix = c("_pipe1", "_pipe2")) |> 
+  rowwise() |>
+  mutate(WaterFlow = mean(c(WaterFlow_pipe1, WaterFlow_pipe2), na.rm = TRUE)) |>
+  ungroup() |>
+  select(datetime_hour, WaterFlow) |>
+  as_tsibble(index = datetime_hour)
+
+# Plot the series 
+autoplot(pipes_combined, WaterFlow) +
+  labs(title = "Combined Water Flow Pipes", y = "Water Flow", x = "Date")
 ```
+
+We have a slew of missing values to deal with. Given they are generally not consecutive, a linear interpolation to connect the values of the last observation with the missing one seems to be reasonable.
+
+```{r}
+pipes_combined |> scan_gaps()
+
+pipes_combined <- pipes_combined |> 
+  fill_gaps() |> 
+  mutate(WaterFlow = na_interpolation(WaterFlow, option = "linear"))
+```
+
+With gaps filled, we must now adjust the variance in the time series using a BoxCox transformation
+
+```{r}
+lambda <- pipes_combined |> 
+  features(WaterFlow, features = guerrero) |> 
+  pull(lambda_guerrero)
+
+pipes_transformed <- pipes_combined |> 
+  mutate(WaterFlow = box_cox(WaterFlow, lambda))
+
+autoplot(pipes_transformed)
+```
+
+We split the data into test and train sets
+
+```{r}
+# Train test split
+pipe_train <- pipes_transformed |> filter_index(~ "2015-11-26")
+pipe_test <- pipes_transformed |> filter_index("2015-11-27" ~ .) |> drop_na()
+```
+
+Now we train the model, checking residuals to make sure they visually look like white noise with no discernable patterns.
+
+```{r}
+# Train models
+pipes_fit <- pipe_train |> 
+  model(
+    mean = MEAN(),
+    naive = NAIVE(),
+    drift = RW(~ drift()),
+    arima = ARIMA(),
+    ets = ETS()
+  )
+
+# Check residuals
+for (model_name in names(pipes_fit)) {
+  print(pipes_fit |> select(all_of(model_name)) |> gg_tsresiduals() + 
+          ggtitle(model_name))
+}
+
+# Forecast on test data
+pipes_fc <- pipes_fit |>
+  forecast(h = "7 days")
+
+# Plot forecasts against test data
+pipes_fc |>
+  autoplot(pipes_transformed)
+```
+
+Clearly, drift and naive do not do well with this time series. We will remove and review the other models.
+
+```{r}
+pipes_fc |> 
+  filter(.model %in% c('arima', 'ets', 'mean')) |> 
+  autoplot(pipe_test)
+```
+
+These look more reasonable, so let's review the accuracy to make a more quantitative decision.
+
+```{r}
+pipes_fc |> 
+  accuracy(pipes_transformed) |>
+  select(-all_of(exclude_metrics)) |>
+  kable()
+```
+
+Our models all improve upon a naive selection of the previous value given the MASE < 1. The best performers were the ARIMA model, and surprisingly, the simple mean. Given the random noise nature of the series, it is unsurprising that the (0,1,3) ARIMA model, heavily weight on the local moving average, and simple mean of the test series performed the best. Given the slight tradeoff in accuracy, we should prefer the very simple mean to forecast these series.
+
+```{r}
+# Export forecasts with point estimates and prediction intervals
+pipes_fc |> 
+  filter(.model %in% c('arima', 'mean')) |> 
+  hilo(level = c(80, 95)) |> 
+  unpack_hilo(c(`80%`, `95%`)) |>  # unpacks intervals into separate columns
+  as_tibble() |> 
+  select(datetime_hour, .model, .mean, `80%_lower`, `80%_upper`, `95%_lower`, `95%_upper`) |>
+  write_xlsx("water_flow_forecast.xlsx")
+```
+

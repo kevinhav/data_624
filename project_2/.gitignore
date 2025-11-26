@@ -1,0 +1,22 @@
+# R project-specific files
+.Rhistory
+.RData
+.Ruserdata
+*.Rproj.user
+
+# renv
+renv/library
+renv/python
+renv/activate.R
+
+# Mac files
+.DS_Store
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/

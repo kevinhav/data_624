@@ -1,0 +1,252 @@
+---
+title: "Student Data Exploratory Data Analysis"
+author: "Data Analysis"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: true
+    code-summary: "Show code"
+    theme: cosmo
+    embed-resources: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  fig.width = 10,
+  fig.height = 6
+)
+
+library(readxl)
+library(tidyverse)
+library(skimr)
+library(GGally)
+library(kableExtra)
+library(patchwork)
+```
+
+## Data Loading
+
+```{r load-data}
+# Load the StudentData
+df <- read_excel("data/StudentData.xlsx")
+
+# Display basic information
+cat("Data loaded successfully!\n")
+cat("Dimensions:", dim(df)[1], "rows,", dim(df)[2], "columns\n")
+```
+
+## Data Overview
+
+```{r data-structure}
+# Display structure
+str(df)
+```
+
+```{r first-rows}
+# Display first few rows
+head(df) %>%
+  kable(caption = "First 6 rows of Student Data") %>%
+  kable_styling()
+```
+
+## Summary Statistics
+
+```{r summary-stats}
+# Using skim for comprehensive summary
+skim(df)
+```
+
+```{r basic-summary}
+# Numeric summary
+summary(df) %>%
+  kable(caption = "Basic Summary Statistics")
+```
+
+## Missing Data Analysis
+
+```{r missing-data}
+# Check for missing values
+missing_summary <- data.frame(
+  Column = names(df),
+  Missing_Count = colSums(is.na(df)),
+  Missing_Percentage = round(colSums(is.na(df)) / nrow(df) * 100, 2)
+)
+
+missing_summary %>%
+  filter(Missing_Count > 0) %>%
+  kable(caption = "Missing Values Summary") %>%
+  kable_styling()
+
+if(sum(missing_summary$Missing_Count) == 0) {
+  cat("No missing values detected in the dataset!\n")
+}
+```
+
+## Univariate Analysis
+
+### Numeric Variables
+
+```{r numeric-distributions}
+# Get numeric columns
+numeric_cols <- df %>% select(where(is.numeric)) %>% names()
+
+# Create density plots for numeric variables
+if(length(numeric_cols) > 0) {
+  df %>%
+    select(all_of(numeric_cols)) %>%
+    pivot_longer(everything(), names_to = "variable", values_to = "value") %>%
+    ggplot(aes(x = value, fill = variable)) +
+    geom_histogram(bins = 30, alpha = 0.7) +
+    facet_wrap(~variable, scales = "free") +
+    theme_minimal() +
+    theme(legend.position = "none") +
+    labs(title = "Distribution of Numeric Variables",
+         x = "Value", y = "Frequency")
+}
+```
+
+```{r numeric-box-plots}
+# Box plots for numeric variables
+if(length(numeric_cols) > 0) {
+  df %>%
+    select(all_of(numeric_cols)) %>%
+    pivot_longer(everything(), names_to = "variable", values_to = "value") %>%
+    ggplot(aes(x = variable, y = value, fill = variable)) +
+    geom_boxplot(alpha = 0.7) +
+    facet_wrap(~variable, scales = "free") +
+    theme_minimal() +
+    theme(legend.position = "none",
+          axis.text.x = element_text(angle = 45, hjust = 1)) +
+    labs(title = "Box Plots of Numeric Variables",
+         x = "Variable", y = "Value")
+}
+```
+
+### Categorical Variables
+
+```{r categorical-analysis}
+# Get categorical columns
+categorical_cols <- df %>% select(where(is.character) | where(is.factor)) %>% names()
+
+if(length(categorical_cols) > 0) {
+  for(col in categorical_cols) {
+    cat("\n### ", col, "\n\n")
+
+    # Count table
+    counts <- df %>%
+      group_by(!!sym(col)) %>%
+      summarise(Count = n(), Percentage = round(n() / nrow(df) * 100, 2)) %>%
+      arrange(desc(Count))
+
+    print(kable(counts, caption = paste("Frequency of", col)))
+  }
+}
+```
+
+```{r categorical-bar-plots}
+# Bar plots for categorical variables
+if(length(categorical_cols) > 0) {
+  plots <- list()
+
+  for(i in seq_along(categorical_cols)) {
+    col <- categorical_cols[i]
+
+    plots[[i]] <- df %>%
+      group_by(!!sym(col)) %>%
+      summarise(count = n()) %>%
+      ggplot(aes(x = reorder(!!sym(col), -count), y = count, fill = !!sym(col))) +
+      geom_bar(stat = "identity", alpha = 0.7) +
+      theme_minimal() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1),
+            legend.position = "none") +
+      labs(title = paste("Distribution of", col),
+           x = col, y = "Count")
+  }
+
+  # Display plots
+  if(length(plots) > 0) {
+    wrap_plots(plots, ncol = 2)
+  }
+}
+```
+
+## Bivariate Analysis
+
+### Numeric Variables Correlation
+
+```{r correlation-matrix}
+# Correlation matrix for numeric variables
+if(length(numeric_cols) > 1) {
+  cor_matrix <- df %>%
+    select(all_of(numeric_cols)) %>%
+    cor(use = "complete.obs")
+
+  print(kable(cor_matrix, caption = "Correlation Matrix - Numeric Variables", digits = 3))
+}
+```
+
+```{r correlation-plot}
+# Visualization of correlations
+if(length(numeric_cols) > 1) {
+  df %>%
+    select(all_of(numeric_cols)) %>%
+    ggcorr(method = c("complete.obs", "pearson"),
+           label = TRUE,
+           label_size = 3,
+           hjust = 0.75) +
+    labs(title = "Correlation Heatmap - Numeric Variables")
+}
+```
+
+### Relationships Between Variables
+
+```{r scatter-plots}
+# Create scatter plots for numeric variables
+if(length(numeric_cols) > 1) {
+  df %>%
+    select(all_of(numeric_cols)) %>%
+    ggpairs(lower = list(continuous = wrap("points", alpha = 0.3)),
+            diag = list(continuous = wrap("barDiag", alpha = 0.5)),
+            upper = list(continuous = wrap("cor", size = 3))) +
+    theme_minimal() +
+    labs(title = "Pairwise Relationships - Numeric Variables")
+}
+```
+
+## Key Findings
+
+```{r key-findings}
+cat("### Data Summary\n\n")
+cat("- **Total Records:** ", nrow(df), "\n")
+cat("- **Total Features:** ", ncol(df), "\n")
+cat("- **Numeric Variables:** ", length(numeric_cols), "\n")
+cat("- **Categorical Variables:** ", length(categorical_cols), "\n")
+cat("- **Missing Values:** ", sum(is.na(df)), "\n\n")
+
+if(length(numeric_cols) > 0) {
+  cat("### Numeric Variables Summary\n\n")
+  numeric_summary <- df %>%
+    select(all_of(numeric_cols)) %>%
+    summarise(across(everything(),
+                    list(min = min,
+                         max = max,
+                         mean = mean,
+                         median = median,
+                         sd = sd),
+                    .names = "{.col}_{.fn}"))
+  print(numeric_summary)
+}
+```
+
+## Recommendations for Further Analysis
+
+- Investigate relationships between key variables
+- Perform statistical tests if needed
+- Consider data transformations for skewed distributions
+- Identify and handle outliers if appropriate
+- Validate data quality assumptions
