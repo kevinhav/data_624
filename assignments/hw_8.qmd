@@ -1,0 +1,228 @@
+---
+title: "Homework 8"
+subtitle: "DATA 624"
+author: "Kevin Havis"
+date: today
+date-format: "MMMM D, YYYY"
+format: 
+  pdf:
+    toc: false
+    number-sections: false
+    colorlinks: true
+  html:
+    toc: false
+    toc-depth: 3
+    number-sections: false
+    code-fold: false
+    theme: cosmo
+    embed-resources: true
+execute:
+  warning: false
+  message: false
+  echo: true
+  cache: false
+---
+
+
+```{r}
+#| label: setup
+#| include: false
+
+# Load required libraries
+library(tidyverse)
+library(AppliedPredictiveModeling)
+library(knitr)
+library(mlbench)
+library(caret)
+library(earth)
+library(caretEnsemble)
+library(recipes)
+
+
+# Set default chunk options
+knitr::opts_chunk$set(
+  fig.width = 8,
+  fig.height = 6,
+  fig.align = "center",
+  out.width = "80%"
+)
+
+# Set ggplot theme
+theme_set(theme_minimal())
+```
+
+# Homework 8
+
+## 7.2
+
+For this assignment, we've been asked to experiment with different non-linear models, including SVM, MARS, and KNN.
+
+The book provides an example for KNN which we will include as a benchmark, alongside which we will train the SVM and MARS models.
+
+The convenient `mlbench` package allows us to generate data on the fly to experiment; some of the features are meaningful to the target variable, while others are added as noise. As such, we will check the feature importances in a later section.
+
+Setting up the train / test splits, the cross validation, and the models are our first steps.
+
+```{r}
+set.seed(42)
+
+
+training_data <- mlbench.friedman1(200, sd=1)
+training_data$x <- data.frame(training_data$x)
+
+featurePlot(training_data$x, training_data$y)
+
+test_data <- mlbench.friedman1(5000, sd=1)
+test_data$x <- data.frame(test_data$x)
+
+# Set up cross validation
+ctrl <- trainControl(method = 'cv', number = 5)
+
+models <- caretList(
+  x=training_data$x,
+  y=training_data$y,
+  trControl = ctrl,
+  methodList = c("svmRadial", "earth", "knn"))
+
+# Get predictions for all models
+pred_svm <- predict(models$svmRadial, newdata = test_data$x)
+pred_mars <- predict(models$earth, newdata = test_data$x)
+pred_knn <- predict(models$knn, newdata = test_data$x)
+
+
+# Compare performance
+results <- data.frame(
+  svm = postResample(pred_svm, test_data$y),
+  earth = postResample(pred_mars, test_data$y),
+  knn = postResample(pred_knn, test_data$y)
+)
+
+results |> 
+  kable()
+
+summary(models$earth)
+```
+
+For this dataset, MARS (a.k.a. `earth`) performs the best with an R2 of 0.8575, followed by SVM with 0.7887 and KNN of 0.6482. Generally, models with R2 greater than 80% are acceptable, so the only real choice would be the MARS model.
+
+Check the features that MARS selected, we can see that the "real" features were indeed identified (X1-X5). Interestingly, it also selected X10 with a moderate coefficient, which isn't intended to be one of the useful features. This is likely due to random correlation in the dataset.
+
+
+## 7.5
+
+We will now apply the same principles to the dataset we previously looked at in Section 6.3, where we originally trained linear models against the data. This time, we'll see if non-linear can perform better.
+
+I've include our best performing linear model, Lasso, for comparison. Last time we got an R2 of 0.6946, so that is our mark to beat with the non-linear models.
+
+As we did previously, we will impute the missing data in this dataset using KNN for all models.
+
+```{r}
+set.seed(42)
+
+
+data(ChemicalManufacturingProcess)
+
+# Split up the data set
+y <- ChemicalManufacturingProcess[, 1]
+
+x <- ChemicalManufacturingProcess[, -1]
+
+# Use this partition to ensure well-distributed splits
+idx <- createDataPartition(y, p = 0.8, list = FALSE)
+
+train_x <- x[idx, ]
+train_y <- y[idx]
+
+test_x <- x[-idx, ]
+test_y <- y[-idx]
+
+
+# Use recipes to help us set up the preprocessing
+
+rec <- recipe(y ~ ., data=data.frame(train_x, y=train_y)) |> 
+  step_impute_knn(all_predictors(), neighbors=5) #KNN null imputation
+```
+
+```{r}
+# Set up cross validation
+chem_ctrl <- trainControl(method = 'cv', number = 5)
+
+models <- caretList(
+  x=train_x,
+  y=train_y,
+  preProcess = 'knnImpute',
+  trControl = chem_ctrl,
+  methodList = c("svmRadial", "earth", "knn", "lasso"))
+
+# Get predictions for all models
+pred_svm <- predict(models$svmRadial, newdata = test_x)
+pred_mars <- predict(models$earth, newdata = test_x)
+pred_knn <- predict(models$knn, newdata = test_x)
+pred_lasso <- predict(models$lasso, newdata = test_x)
+
+
+# Compare performance
+results <- data.frame(
+  svm = postResample(pred_svm, test_y), 
+  earth = postResample(pred_mars, test_y),
+  knn = postResample(pred_knn, test_y),
+  lasso = postResample(pred_lasso, test_y)
+)
+
+results |> 
+  kable()
+```
+
+As we can see, both SVM and MARS models quickly outperform the Lasso model for this data, with SVM having slightly higher R2 values. This tells me that the relationship for this data is likely not quite linear, given the improvement.
+
+Inspecting the top ten features, the Manufacturing processes again provide the most value. The main difference however, is that none of the top 10 manufacturing process features besides the 10th appeared in our linear (lasso) model. This is intuitive as we would expect non-linear features to work better with non-linear models and vice-versa.
+
+```{r}
+svm_importance <- filterVarImp(x = train_x, y = train_y) %>%
+  as_tibble(rownames = "feature") %>%
+  arrange(desc(Overall))
+
+svm_importance |> kable(caption="Top Non-Linear (SVM) Features")
+```
+```{r}
+# Extract selected coefficients
+lasso_coefs <- models$lasso$finalModel$beta.pure %>%
+  as_tibble(rownames = "step") %>%
+  slice(n()) %>%
+  pivot_longer(-step, names_to = "predictor", values_to = "coefficient") %>%
+  filter(coefficient != 0) %>%
+  select(predictor, coefficient) %>%
+  arrange(desc(abs(coefficient)))
+
+kable(lasso_coefs, caption="Top Linear (Lasso) Features")
+```
+
+Finally, visually inspecting the relationship between the strong predictors and the target variable confirm our intuition regarding the appropriateness of a linear vs non-linear model. I've also included the common predictor, `ManufacturingProcess33`, since it appeared mutually; given that the majority of the line of best fit is approximately linear, and appears to be relatively well correlated, it is reasonable for both models to find it informative.
+ 
+```{r}
+top_preds <- c("ManufacturingProcess32", "ManufacturingProcess09", 
+               "ManufacturingProcess13", "ManufacturingProcess36", 
+               "ManufacturingProcess17", "BiologicalMaterial03",
+               "BiologicalMaterial06", "BiologicalMaterial02", "ManufacturingProcess33")
+
+plot_data <- x[, top_preds] %>%
+  as_tibble() %>%
+  bind_cols(yield = y) %>%
+  pivot_longer(-yield, names_to = "predictor", values_to = "value") %>%
+  drop_na() %>%
+  filter(value >= 1)
+
+ggplot(plot_data, aes(x = value, y = yield)) +
+  geom_point(alpha = 0.6, size = 2) +
+  geom_smooth(method = "loess", se = TRUE, color = "blue") +
+  facet_wrap(~predictor, scales = "free_x", ncol = 4) +
+  labs(title = "Top Non-Linear Predictors vs Yield",
+       x = "Predictor Value",
+       y = "Yield") +
+  theme_minimal() +
+  theme(strip.text = element_text(face = "bold"))
+```
+
+## Conclusion
+
+Knowing when to apply different models given different data is a key aspect of machine learning. There is no one-size fits all approach; we are always managing the bias variance trade off. While transforming the data to apply a simpler linear regression can be an impactful technique, sometimes this approach can feel like "square hole, round peg". The domain, as always, is the most important consideration, and a non-linear model may be the best way to model the data. As data scientists, this is where our experience and knowledge comes into play.

@@ -1,0 +1,573 @@
+---
+title: "Homework 9"
+subtitle: "DATA 624"
+author: "Kevin Havis"
+date: today
+date-format: "MMMM D, YYYY"
+format: 
+  pdf:
+    toc: false
+    number-sections: false
+    colorlinks: true
+  html:
+    toc: false
+    toc-depth: 3
+    number-sections: false
+    code-fold: false
+    theme: cosmo
+    embed-resources: true
+execute:
+  warning: false
+  message: false
+  echo: true
+  cache: false
+---
+
+
+```{r}
+#| label: setup
+#| include: false
+
+# Load required libraries
+library(tidyverse)
+library(AppliedPredictiveModeling)
+library(knitr)
+library(mlbench)
+library(caret)
+library(caretEnsemble)
+library(recipes)
+library(randomForest)
+library(party)
+library(gbm)
+library(rpart)
+
+
+
+# Set default chunk options
+knitr::opts_chunk$set(
+  fig.width = 8,
+  fig.height = 6,
+  fig.align = "center",
+  out.width = "80%"
+)
+
+# Set ggplot theme
+theme_set(theme_minimal())
+```
+
+# Homework 8
+
+## 8.1
+
+To start we will set up some synthetic data to experiment with some tree models throughout this assignment.
+
+```{r}
+set.seed(42)
+
+simulated <- mlbench.friedman1(200, sd = 1)
+simulated <- cbind(simulated$x, simulated$y)
+simulated <- as.data.frame(simulated)
+colnames(simulated)[ncol(simulated)] <- "y"
+```
+
+
+### Part a
+
+One of the useful parts about tree models is we can easily extract features importances to see which features the model weighted the most heavily. We will do this now with a simple Random Forest, an ensemble decision tree model.
+
+```{r}
+model1 <- randomForest(y ~ ., data=simulated,
+                       importance = TRUE,
+                       ntree = 1000)
+
+rfImp1 <- varImp(model1, scale = FALSE)
+
+print(rfImp1)
+```
+
+The Random Forest model did not significantly use the uninformative predictors (V6-V10); they are given an importance < 1
+
+
+
+### Part b
+
+Another advantage of tree models is that they are fairly robust to highly correlated features, although the will split the relative importance amongst them.
+
+We will demonstrate this be creating a dummy valuue that is very highly correlated with one of the top features, and see how the model handles it
+
+```{r}
+simulated$duplicate1 <- simulated$V1 + rnorm(200) * 0.1
+
+cor(simulated$duplicate1, simulated$V1)
+```
+
+```{r}
+model2 <- randomForest(y ~ ., data=simulated,
+                       importance = TRUE,
+                       ntree = 1000)
+
+rfImp2 <- varImp(model2, scale = FALSE)
+
+print(rfImp2)
+```
+
+The importance value for `V1` decreased from 8.61 without the outlier to 5.66 with the outlier. The model is finding them to be comparably important when splitting the dataset, so the importance is divded nearly equally.
+
+```{r}
+# Add another outlier
+simulated$duplicate2 <- simulated$V1 + rnorm(200) * 0.1
+
+model3 <- randomForest(y ~ ., data=simulated,
+                       importance = TRUE,
+                       ntree = 1000)
+
+rfImp3 <- varImp(model3, scale = FALSE)
+
+print(rfImp3)
+```
+
+`V1` importance scores went down further, demonstrating the reduced information gain from `V1` when we add highly correlated features; the importance is divided amongst the correlated features because they do an roughly equally good job at splitting the data.
+
+
+### Part c
+
+A conditional forest model can be used to help reduce the impact of correlated features on importance scores. Let's see how this model handles the same data with correlated features.
+
+```{r}
+model_cond <- party::cforest(y ~ ., data = simulated)
+
+rfImp_cond <- varimp(model_cond, conditional = TRUE)
+
+print(data.frame(rfImp_cond))
+```
+
+For conditional model, the importances are roughly the same proportionally to the original random forest model, so I would concur that they do follow the same pattern.
+
+### Part d
+
+Now we will compare several tree models in parallel to compare the feature importances selected by each variation.
+
+```{r}
+# Set up training control
+ctrl <- trainControl(
+  method = "cv",
+  number = 5,
+  savePredictions = "final",
+  classProbs = FALSE
+)
+
+# Train models
+set.seed(42)
+
+gbm_model <- train(
+  y ~ .,
+  data = simulated,
+  method = "gbm",
+  trControl = ctrl,
+  tuneLength = 5,
+  verbose = FALSE
+)
+
+rf_model <- train(
+  y ~ .,
+  data = simulated,
+  method = "rf",
+  trControl = ctrl,
+  tuneLength = 5
+)
+
+cubist_model <- train(
+  y ~ .,
+  data = simulated,
+  method = "cubist",
+  trControl = ctrl,
+  tuneLength = 5
+)
+
+# Extract feature importances
+gbm_imp <- varImp(gbm_model)$importance %>%
+  rownames_to_column("feature") %>%
+  as_tibble() %>%
+  mutate(model = "GBM") %>%
+  rename(importance = Overall)
+
+rf_imp <- varImp(rf_model)$importance %>%
+  rownames_to_column("feature") %>%
+  as_tibble() %>%
+  mutate(model = "Random Forest") %>%
+  rename(importance = Overall)
+
+cubist_imp <- varImp(cubist_model)$importance %>%
+  rownames_to_column("feature") %>%
+  as_tibble() %>%
+  mutate(model = "Cubist") %>%
+  rename(importance = Overall)
+
+# Combine and normalize by model
+all_importances <- bind_rows(gbm_imp, rf_imp, cubist_imp) %>%
+  group_by(model) %>%
+  mutate(importance = importance / max(importance) * 100) %>%
+  ungroup()
+
+# Display importances
+all_importances %>%
+  arrange(model, desc(importance))
+
+# Visualize
+all_importances %>%
+  ggplot(aes(x = reorder(feature, importance), y = importance, fill = model)) +
+  geom_col(position = "dodge") +
+  facet_wrap(~model, scales = "free_x") +
+  coord_flip() +
+  labs(title = "Feature Importances by Model",
+       x = "Feature", y = "Importance (normalized)") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+Other tree models, including Cubist and Gradient boosted, tend to follow the same pattern of feature importance. The one exception is that the Cubist model has weighted `V4` less heavily, and generally has spread its feature importance more evenly.
+
+## 8.2
+
+Decision trees and related models have two primary hypertuning parameters; their depth and their minimum split size (i.e. number of branches). As with all models, more complexity can result in overfitting, while too little can miss some of the signal in the data.
+
+The classic bias-variance trade off can be demonstrated below, showing how tree complexity can improve accuracy up to a point, but then leads to overfitting and reduced generalizability. 
+
+```{r}
+library(tidyverse)
+library(rpart)
+
+# Set seed for reproducibility
+set.seed(123)
+
+# 1. Generate true underlying relationship
+n <- 200
+x <- runif(n, 0, 10)
+y_true <- sin(x) + 0.1 * x
+
+# 2. Function to generate noisy data and fit trees at different depths
+simulate_trees <- function(n_sims = 100, max_depth = 5) {
+  depths <- 1:max_depth
+  
+  results <- expand_grid(
+    sim = 1:n_sims,
+    depth = depths
+  ) %>%
+    mutate(
+      predictions = map2(sim, depth, function(s, d) {
+        set.seed(s)
+        x_train <- runif(n, 0, 10)
+        y_train <- sin(x_train) + rnorm(n, 0, 0.5)
+        
+        tree <- rpart(y_train ~ x_train, 
+                      control = rpart.control(maxdepth = d, minsplit = 5))
+        
+        pred_data <- tibble(x_train = seq(0, 10, length.out = 100))
+        predict(tree, pred_data)
+      }),
+      x_eval = list(seq(0, 10, length.out = 100))
+    ) %>%
+    unnest(c(predictions, x_eval)) %>%
+    mutate(y_true_eval = sin(x_eval) + 0.1 * x_eval)
+  
+  return(results)
+}
+
+# 3. Calculate bias and variance
+results <- simulate_trees(n_sims = 100, max_depth = 6)
+
+metrics <- results %>%
+  group_by(depth, x_eval) %>%
+  summarise(
+    pred_mean = mean(predictions),
+    pred_var = var(predictions),
+    y_true = first(y_true_eval),
+    bias = (pred_mean - y_true)^2,
+    .groups = "drop"
+  ) %>%
+  group_by(depth) %>%
+  summarise(
+    avg_bias = mean(bias),
+    avg_variance = mean(pred_var),
+    avg_mse = avg_bias + avg_variance,
+    .groups = "drop"
+  )
+
+# 4. Visualize results
+p1 <- metrics %>%
+  pivot_longer(starts_with("avg_"), names_prefix = "avg_") %>%
+  ggplot(aes(depth, value, color = name, shape = name)) +
+  geom_point(size = 3) +
+  geom_line() +
+  labs(
+    title = "Bias-Variance Tradeoff: Tree Depth",
+    x = "Tree Depth (Granularity)",
+    y = "Error Component",
+    color = "Metric",
+    shape = "Metric"
+  ) +
+  scale_color_manual(values = c("avg_bias" = "#E69F00", 
+                                 "avg_variance" = "#56B4E9", 
+                                 "avg_mse" = "#CC79A7")) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+
+# 5. Visualize predictions at different depths
+example_sim <- results %>%
+  filter(sim <= 20) %>%
+  mutate(depth = factor(depth, labels = paste("Depth =", 1:6)))
+
+p2 <- example_sim %>%
+  ggplot(aes(x_eval, predictions, group = sim)) +
+  geom_line(alpha = 0.3, color = "steelblue") +
+  geom_line(aes(x = x_eval, y = y_true_eval, group = NA), 
+            color = "red", size = 1, data = example_sim %>% distinct(depth, x_eval, y_true_eval)) +
+  facet_wrap(~depth, nrow = 2) +
+  labs(
+    title = "Predictions from 20 Simulations (Red = True Function)",
+    x = "x",
+    y = "y"
+  ) +
+  theme_minimal()
+
+print(p1)
+print(p2)
+
+# 6. Print summary table
+
+metrics %>% 
+      mutate(across(starts_with("avg_"), round, 4)) |> kable()
+```
+
+
+## 8.3
+
+### Part a
+
+The right hand model, with a higher learning rate and bagging fraction, is training more greedily due to these parameters. By setting the learning rate high, and the resample (bagging) fraction to nearly 1, we've asked the right model to "trust" the early predictions of the boost stack more readily, and is also more exposed to a large portion of the training set. As such, it will produce trees that are biased towards the early "stumps".
+
+The left model is the inverse. We are allowing it to train very slowly, reducing the predictive value of each node, which results in a more aggregated prediction.
+
+### Part b
+
+For additional test samples, I would expect the less greedy model (left) to be more performative. The greedy model has likely been overfit on the top feature (`NumCarbon`) and as such would be very reliant on that feature for predictive performance on out-of-sample data.
+
+### Part c
+
+Increasing the interaction depth allows for features to interact with each other; as the depth of the tree increases, each node is dependant on all the nodes above it, hence creating and interaction effect between features. In this way, the relative importance of the features becomes more widely distributed, as the overall impact of a single feature is reduced by the later nodes using additional features to fit and predict.
+
+Below is an example of how increasing the depth allows the importance to become more evenly distributed.
+
+```{r}
+ctrl <- trainControl(
+  method = "cv",
+  number = 5,
+  savePredictions = "final",
+  classProbs = FALSE
+)
+
+# Train models
+set.seed(42)
+gbm_model_1 <- train(
+  y ~ .,
+  data = simulated,
+  method = "gbm",
+  trControl = ctrl,
+  tuneLength = 5,
+  verbose = FALSE
+)
+
+gbm_model_2 <- train(
+  y ~ .,
+  data = simulated,
+  method = "gbm",
+  trControl = ctrl,
+  tuneGrid = expand.grid(
+    n.trees = 50:150,
+    interaction.depth = 2,
+    shrinkage = 0.1,
+    n.minobsinnode = 10
+  ),
+  verbose = FALSE
+)
+
+gbm_model_3 <- train(
+  y ~ .,
+  data = simulated,
+  method = "gbm",
+  trControl = ctrl,
+  tuneGrid = expand.grid(
+    n.trees = 50:150,
+    interaction.depth = 3,
+    shrinkage = 0.1,
+    n.minobsinnode = 10
+  ),
+  verbose = FALSE
+)
+
+gbm_model_4 <- train(
+  y ~ .,
+  data = simulated,
+  method = "gbm",
+  trControl = ctrl,
+  tuneGrid = expand.grid(
+    n.trees = 50:150,
+    interaction.depth = 4,
+    shrinkage = 0.1,
+    n.minobsinnode = 10
+  ),
+  verbose = FALSE
+)
+
+# Extract feature importances
+gbm_imp_1 <- varImp(gbm_model_1)$importance %>%
+  rownames_to_column("feature") %>%
+  as_tibble() %>%
+  mutate(model = "GBM (depth = 1)") %>%
+  rename(importance = Overall)
+
+gbm_imp_2 <- varImp(gbm_model_2)$importance %>%
+  rownames_to_column("feature") %>%
+  as_tibble() %>%
+  mutate(model = "GBM (depth = 2)") %>%
+  rename(importance = Overall)
+
+gbm_imp_3 <- varImp(gbm_model_3)$importance %>%
+  rownames_to_column("feature") %>%
+  as_tibble() %>%
+  mutate(model = "GBM (depth = 3)") %>%
+  rename(importance = Overall)
+
+gbm_imp_4 <- varImp(gbm_model_4)$importance %>%
+  rownames_to_column("feature") %>%
+  as_tibble() %>%
+  mutate(model = "GBM (depth = 4)") %>%
+  rename(importance = Overall)
+
+# Combine and normalize by model
+all_importances <- bind_rows(gbm_imp_1, gbm_imp_2, gbm_imp_3, gbm_imp_4) %>%
+  group_by(model) %>%
+  mutate(importance = importance / max(importance) * 100) %>%
+  ungroup()
+
+# Display importances
+all_importances %>%
+  arrange(model, desc(importance))
+
+# Visualize
+all_importances %>%
+  ggplot(aes(x = reorder(feature, importance), y = importance, fill = model)) +
+  geom_col(position = "dodge") +
+  facet_wrap(~model, scales = "free_x") +
+  coord_flip() +
+  labs(title = "Feature Importances by Model",
+       x = "Feature", y = "Importance (normalized)") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+
+## 8.7
+
+Loading up the familiar dataset on manufacturing processes, we will now train tree models on the same data and review performance.
+
+```{r}
+set.seed(42)
+
+
+data(ChemicalManufacturingProcess)
+
+# Split up the data set
+y <- ChemicalManufacturingProcess[, 1]
+
+x <- ChemicalManufacturingProcess[, -1]
+
+# Use this partition to ensure well-distributed splits
+idx <- createDataPartition(y, p = 0.8, list = FALSE)
+
+train_x <- x[idx, ]
+train_y <- y[idx]
+
+test_x <- x[-idx, ]
+test_y <- y[-idx]
+
+
+# Use recipes to help us set up the preprocessing
+
+rec <- recipe(y ~ ., data=data.frame(train_x, y=train_y)) |> 
+  step_impute_knn(all_predictors(), neighbors=5) #KNN null imputation
+```
+
+
+
+
+
+### Part a
+
+```{r}
+# Set up cross validation
+chem_ctrl <- trainControl(method = 'cv', number = 5)
+
+models <- caretList(
+  x=train_x,
+  y=train_y,
+  preProcess = 'knnImpute',
+  trControl = chem_ctrl,
+  methodList = c("gbm", "rf", "cubist"),
+  verbose = FALSE)
+
+# Get predictions for all models
+pred_gbm <- predict(models$gbm, newdata = test_x)
+pred_rf <- predict(models$rf, newdata = test_x)
+pred_cubist <- predict(models$cubist, newdata = test_x)
+
+# Compare performance
+results <- tibble(
+  model = c("gbm", "rf", "cubist"),
+  RMSE = c(postResample(pred_gbm, test_y)["RMSE"],
+           postResample(pred_rf, test_y)["RMSE"],
+           postResample(pred_cubist, test_y)["RMSE"]),
+  Rsquared = c(postResample(pred_gbm, test_y)["Rsquared"],
+               postResample(pred_rf, test_y)["Rsquared"],
+               postResample(pred_cubist, test_y)["Rsquared"]),
+  MAE = c(postResample(pred_gbm, test_y)["MAE"],
+          postResample(pred_rf, test_y)["MAE"],
+          postResample(pred_cubist, test_y)["MAE"])
+)
+
+results |> kable()
+```
+
+The Cubist model performs best across all metrics by a significant margin, with R2 = 0.7788 and RMSE of 0.99.
+
+### Part b
+
+```{r}
+cubist_importance <- varImp(models$cubist) |> 
+  pluck("importance") |> 
+  rownames_to_column("feature") |> 
+  as_tibble() |> 
+  filter(Overall > 0) |>
+  arrange(desc(Overall))
+
+head(cubist_importance, 10) |> kable()
+```
+
+Manufacturing processes were generally the most important for the Cubist model, specifically 32, 09, 33, and 04, followed by a mix of biological and manufacturing features.
+
+These features importances are more similar to the SVM model we trained last time; both models listed 32 and 09 as the two most important.The same biological features are found to be informative for the two models as well.
+
+The linear model did not share many important features with the Cubist model. This makes sense given Cubist is essentially non-linear way of finding patterns.
+
+
+### Part c
+
+I was unable to find a way to plot the actual tree diagram for a Cubist model, but I've produced the model summary.
+
+Reviewing the different linear equations the model selected, we can see that when used, `ManufacturingProcess32` always has a strong, positive coefficient towards the target variable.
+
+From a business standpoint, this means that `ManufacturingProcess32` is likely a key driver of yield in the chemical manufacturing process, and optimizing this process could lead to significant improvements in overall yield.
+
+```{r}
+summary(models$cubist$finalModel)
+```
+
