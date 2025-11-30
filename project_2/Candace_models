@@ -1,0 +1,1195 @@
+---
+title: "Student Data Exploratory Data Analysis"
+author: "Data Analysis"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    code_folding: hide
+    theme: cosmo
+---
+
+# Introduction
+
+This technical report documents the development and evaluation of predictive models for pH levels in ABC Beverage's manufacturing process. In response to new regulatory requirements, we developed models that can accurately predict pH values based on manufacturing parameters.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+set.seed(123)  # for reproducibility
+```
+
+# 1. Overview
+
+In this report, we build and compare multiple predictive models for **pH** in ABC Beverage's manufacturing process.
+We use a **pre-defined training set and test set**, apply cross-validation to tune models on the training set, and then evaluate the models' performance on the held-out test set.
+
+We fit **six models**:
+
+1. Multiple Linear Regression (10-fold CV, repeated 3x)
+2. Random Forest (10-fold CV, repeated 3x)
+3. Gradient Boosted Trees (10-fold CV, repeated 3x)
+4. **k-Nearest Neighbors Regression (5-fold CV)**
+5. **Ridge Regression (5-fold CV)**
+6. **Elastic Net Regression (5-fold CV)**
+
+The goal is to select a final model that balances **predictive accuracy** and **interpretability**, and then generate pH predictions suitable for business reporting.
+
+---
+
+# 2. Packages and Data Loading
+
+```{r libraries}
+# Core packages
+library(readxl)     # if your data is in Excel
+library(dplyr)
+library(tidyr)
+library(janitor)
+library(ggplot2)
+library(corrplot)
+
+# Modeling packages
+library(caret)
+library(randomForest)
+library(gbm)
+library(glmnet)     # For ridge and elastic net regression
+
+# For model evaluation
+library(Metrics)
+
+# Export predictions
+library(writexl)
+```
+
+## 2.1 Load Training and Test Set
+
+```{r load-data}
+# Read data
+train_raw <- read.csv("StudentData.csv")
+eval_raw  <- read.csv("StudentEvaluation.csv")
+
+# Clean column names
+train_data <- train_raw %>% clean_names()
+test_data  <- eval_raw %>% clean_names()
+
+# Quick structure check
+glimpse(train_data)
+glimpse(test_data)
+```
+
+## 2.2 Data Preprocessing
+
+```{r preprocessing}
+# Check for missing values in training data
+missing_summary <- train_data %>%
+  summarise(across(everything(), ~sum(is.na(.)))) %>%
+  pivot_longer(everything(), names_to = "variable", values_to = "missing_count") %>%
+  filter(missing_count > 0) %>%
+  arrange(desc(missing_count))
+
+print("Variables with missing values:")
+print(missing_summary)
+
+# Impute missing values with median for numeric columns
+train_clean <- train_data %>%
+  mutate(across(where(is.numeric), ~ifelse(is.na(.), median(., na.rm = TRUE), .)))
+
+test_clean <- test_data %>%
+  mutate(across(where(is.numeric), ~ifelse(is.na(.), median(., na.rm = TRUE), .)))
+
+# Remove any rows where pH is still missing (target variable)
+train_clean <- train_clean %>% filter(!is.na(ph))
+
+# Store predictor names (all columns except pH)
+predictor_vars <- setdiff(names(train_clean), "ph")
+
+# For KNN and regularized models, we need to scale features
+# Create a preprocessing object
+preProc <- preProcess(train_clean[, predictor_vars], 
+                      method = c("center", "scale", "medianImpute"))
+
+# Apply preprocessing
+train_scaled <- predict(preProc, train_clean)
+test_scaled <- predict(preProc, test_clean)
+```
+
+---
+
+# 3. Exploratory Data Analysis
+
+## 3.1 Target Variable Distribution
+
+```{r eda-ph}
+# Distribution of pH in training data
+ggplot(train_clean, aes(x = ph)) +
+  geom_histogram(bins = 30, fill = "steelblue", color = "white", alpha = 0.7) +
+  geom_vline(aes(xintercept = mean(ph, na.rm = TRUE)), 
+             color = "red", linetype = "dashed", size = 1) +
+  labs(title = "Distribution of pH (Training Set)",
+       subtitle = paste("Mean pH:", round(mean(train_clean$ph, na.rm = TRUE), 2)),
+       x = "pH", y = "Count") +
+  theme_minimal()
+
+# Summary statistics
+summary(train_clean$ph)
+```
+
+## 3.2 Correlation Analysis
+
+```{r correlation}
+# Select numeric columns for correlation
+numeric_cols <- train_clean %>% 
+  select(where(is.numeric)) %>%
+  select(-any_of("brand_code")) # Remove ID-like columns if present
+
+# Correlation matrix
+cor_matrix <- cor(numeric_cols, use = "pairwise.complete.obs")
+
+# Correlation with pH
+ph_correlations <- cor_matrix[, "ph"] %>%
+  sort(decreasing = TRUE) %>%
+  head(15)
+
+print("Top correlations with pH:")
+print(round(ph_correlations, 3))
+
+# Correlation plot for top variables
+corrplot(cor_matrix, method = "color", type = "upper", 
+         tl.cex = 0.6, tl.col = "black",
+         title = "Correlation Matrix", mar = c(0,0,1,0))
+```
+
+## 3.3 Feature Distributions
+
+```{r feature-distributions}
+# Box plots for key numeric predictors vs pH
+train_clean %>%
+  select(ph, where(is.numeric)) %>%
+  select(1:min(9, ncol(.))) %>%  # Select first 8 predictors + pH
+  pivot_longer(-ph, names_to = "variable", values_to = "value") %>%
+  ggplot(aes(x = value)) +
+  geom_histogram(bins = 25, fill = "steelblue", alpha = 0.7) +
+  facet_wrap(~variable, scales = "free", ncol = 3) +
+  labs(title = "Distribution of Key Predictors") +
+  theme_minimal()
+```
+
+---
+
+# 4. Modeling Methodology
+
+We will use two different cross-validation schemes:
+
+* **10-fold CV (repeated 3x)**: For MLR, Random Forest, and GBM
+* **5-fold CV**: For KNN, Ridge Regression, and Elastic Net
+
+```{r train-control}
+# 10-fold cross-validation, repeated 3 times
+ctrl_10fold <- trainControl(
+  method  = "repeatedcv",
+  number  = 10,
+  repeats = 3,
+  savePredictions = "final",
+  verboseIter = FALSE
+)
+
+# 5-fold cross-validation (for new models)
+ctrl_5fold <- trainControl(
+  method  = "cv",
+  number  = 5,
+  savePredictions = "final",
+  verboseIter = FALSE
+)
+```
+
+---
+
+# 5. Model Development (10-Fold CV Models)
+
+## 5.1 Model 1: Multiple Linear Regression
+
+Multiple linear regression serves as our baseline model. It provides interpretable coefficients that help explain the relationship between manufacturing parameters and pH levels.
+
+### 5.1.1 Model Training
+
+```{r mlr-model}
+# Train multiple linear regression model
+mlr_model <- train(
+  ph ~ .,
+  data = train_clean,
+  method = "lm",
+  trControl = ctrl_10fold,
+  na.action = na.omit
+)
+
+# Model summary
+print(mlr_model)
+
+# View coefficients
+mlr_summary <- summary(mlr_model$finalModel)
+print(mlr_summary)
+```
+
+### 5.1.2 Feature Importance
+
+```{r mlr-importance}
+# Variable importance based on t-statistics
+mlr_importance <- varImp(mlr_model, scale = TRUE)
+plot(mlr_importance, top = 15, main = "MLR Variable Importance")
+```
+
+### 5.1.3 Diagnostic Plots
+
+```{r mlr-diagnostics}
+# Residual plots
+par(mfrow = c(2, 2))
+plot(mlr_model$finalModel)
+par(mfrow = c(1, 1))
+```
+
+### 5.1.4 Cross-Validation Performance
+
+```{r mlr-cv-performance}
+# Cross-validation results
+mlr_cv_results <- mlr_model$results
+print("MLR Cross-Validation Results (10-fold, 3 repeats):")
+print(mlr_cv_results)
+
+cat("\nMLR Cross-Validation RMSE:", round(mlr_cv_results$RMSE, 4))
+cat("\nMLR Cross-Validation R-squared:", round(mlr_cv_results$Rsquared, 4))
+```
+
+---
+
+## 5.2 Model 2: Random Forest
+
+Random Forest is an ensemble method that builds multiple decision trees and aggregates their predictions.
+
+### 5.2.1 Model Training with Hyperparameter Tuning
+
+```{r rf-model}
+# Define tuning grid for mtry (number of variables at each split)
+rf_grid <- expand.grid(
+  mtry = c(2, 4, 6, 8, 10, floor(sqrt(length(predictor_vars))))
+)
+
+# Train Random Forest model
+rf_model <- train(
+  ph ~ .,
+  data = train_clean,
+  method = "rf",
+  trControl = ctrl_10fold,
+  tuneGrid = rf_grid,
+  ntree = 500,
+  importance = TRUE,
+  na.action = na.omit
+)
+
+# Model summary
+print(rf_model)
+
+# Best tuning parameters
+cat("\nBest mtry:", rf_model$bestTune$mtry)
+```
+
+### 5.2.2 Hyperparameter Tuning Visualization
+
+```{r rf-tuning}
+# Plot tuning results
+plot(rf_model, main = "Random Forest Hyperparameter Tuning")
+```
+
+### 5.2.3 Variable Importance
+
+```{r rf-importance}
+# Variable importance
+rf_importance <- varImp(rf_model, scale = TRUE)
+plot(rf_importance, top = 15, main = "Random Forest Variable Importance")
+
+# Detailed importance from the final model
+importance_df <- as.data.frame(importance(rf_model$finalModel))
+importance_df$Variable <- rownames(importance_df)
+importance_df <- importance_df %>%
+  arrange(desc(`%IncMSE`)) %>%
+  head(15)
+
+print("Top 15 Important Variables (% Increase in MSE):")
+print(importance_df[, c("Variable", "%IncMSE", "IncNodePurity")])
+```
+
+### 5.2.4 Cross-Validation Performance
+
+```{r rf-cv-performance}
+# Cross-validation results
+rf_cv_results <- rf_model$results %>% 
+  filter(mtry == rf_model$bestTune$mtry)
+
+print("Random Forest Cross-Validation Results (10-fold, 3 repeats):")
+print(rf_cv_results)
+
+cat("\nRF Cross-Validation RMSE:", round(rf_cv_results$RMSE, 4))
+cat("\nRF Cross-Validation R-squared:", round(rf_cv_results$Rsquared, 4))
+```
+
+---
+
+## 5.3 Model 3: Gradient Boosted Trees (GBM)
+
+Gradient Boosting Machines build sequential trees where each tree corrects the errors of the previous one.
+
+### 5.3.1 Model Training with Hyperparameter Tuning
+
+```{r gbm-model}
+# Define tuning grid
+gbm_grid <- expand.grid(
+  n.trees = c(100, 200, 500),
+  interaction.depth = c(1, 3, 5),
+  shrinkage = c(0.01, 0.1),
+  n.minobsinnode = c(10)
+)
+
+# Train GBM model
+gbm_model <- train(
+  ph ~ .,
+  data = train_clean,
+  method = "gbm",
+  trControl = ctrl_10fold,
+  tuneGrid = gbm_grid,
+  verbose = FALSE,
+  na.action = na.omit
+)
+
+# Model summary
+print(gbm_model)
+
+# Best tuning parameters
+cat("\nBest Parameters:")
+cat("\n  n.trees:", gbm_model$bestTune$n.trees)
+cat("\n  interaction.depth:", gbm_model$bestTune$interaction.depth)
+cat("\n  shrinkage:", gbm_model$bestTune$shrinkage)
+cat("\n  n.minobsinnode:", gbm_model$bestTune$n.minobsinnode)
+```
+
+### 5.3.2 Hyperparameter Tuning Visualization
+
+```{r gbm-tuning}
+# Plot tuning results
+plot(gbm_model, main = "GBM Hyperparameter Tuning")
+```
+
+### 5.3.3 Variable Importance
+
+```{r gbm-importance}
+# Variable importance
+gbm_importance <- varImp(gbm_model, scale = TRUE)
+plot(gbm_importance, top = 15, main = "GBM Variable Importance")
+
+# Summary of the final model
+gbm_summary <- summary(gbm_model$finalModel, plotit = FALSE)
+print("Top 15 Important Variables (Relative Influence):")
+print(head(gbm_summary, 15))
+```
+
+### 5.3.4 Partial Dependence Plots
+
+```{r gbm-pdp}
+# Partial dependence plots for top 4 variables
+top_vars <- head(gbm_summary$var, 4)
+
+par(mfrow = c(2, 2))
+for(var in top_vars) {
+  plot(gbm_model$finalModel, i.var = var, main = paste("PDP:", var))
+}
+par(mfrow = c(1, 1))
+```
+
+### 5.3.5 Cross-Validation Performance
+
+```{r gbm-cv-performance}
+# Cross-validation results for best parameters
+gbm_cv_results <- gbm_model$results %>%
+  filter(n.trees == gbm_model$bestTune$n.trees,
+         interaction.depth == gbm_model$bestTune$interaction.depth,
+         shrinkage == gbm_model$bestTune$shrinkage)
+
+print("GBM Cross-Validation Results (10-fold, 3 repeats):")
+print(gbm_cv_results)
+
+cat("\nGBM Cross-Validation RMSE:", round(gbm_cv_results$RMSE, 4))
+cat("\nGBM Cross-Validation R-squared:", round(gbm_cv_results$Rsquared, 4))
+```
+
+---
+
+# 6. Model Development (5-Fold CV Models)
+
+These models use **5-fold cross-validation** as specified.
+
+## 6.1 Model 4: k-Nearest Neighbors (KNN) Regression
+
+KNN is a non-parametric method that predicts based on the average of the k nearest training observations. It requires scaled features for optimal performance.
+
+### 6.1.1 Model Training with Hyperparameter Tuning
+
+```{r knn-model}
+# Define tuning grid for k (number of neighbors)
+knn_grid <- expand.grid(
+  k = c(1, 3, 5, 7, 9, 11, 15, 20, 25, 30)
+)
+
+# Train KNN model using scaled data
+knn_model <- train(
+  ph ~ .,
+  data = train_scaled,
+  method = "knn",
+  trControl = ctrl_5fold,
+  tuneGrid = knn_grid,
+  na.action = na.omit
+)
+
+# Model summary
+print(knn_model)
+
+# Best k value
+cat("\nBest k (number of neighbors):", knn_model$bestTune$k)
+```
+
+### 6.1.2 Hyperparameter Tuning Visualization
+
+```{r knn-tuning}
+# Plot tuning results
+plot(knn_model, main = "KNN Hyperparameter Tuning (5-Fold CV)")
+
+# Detailed view of k vs RMSE
+ggplot(knn_model$results, aes(x = k, y = RMSE)) +
+  geom_line(color = "steelblue", size = 1) +
+  geom_point(color = "steelblue", size = 3) +
+  geom_vline(xintercept = knn_model$bestTune$k, 
+             linetype = "dashed", color = "red") +
+  labs(title = "KNN: RMSE vs Number of Neighbors (k)",
+       subtitle = paste("Optimal k =", knn_model$bestTune$k),
+       x = "k (Number of Neighbors)", y = "RMSE") +
+  theme_minimal()
+```
+
+### 6.1.3 Cross-Validation Performance
+
+```{r knn-cv-performance}
+# Cross-validation results for best k
+knn_cv_results <- knn_model$results %>%
+  filter(k == knn_model$bestTune$k)
+
+print("KNN Cross-Validation Results (5-fold):")
+print(knn_cv_results)
+
+cat("\nKNN Cross-Validation RMSE:", round(knn_cv_results$RMSE, 4))
+cat("\nKNN Cross-Validation R-squared:", round(knn_cv_results$Rsquared, 4))
+cat("\nKNN Cross-Validation MAE:", round(knn_cv_results$MAE, 4))
+```
+
+### 6.1.4 Bias-Variance Tradeoff Analysis
+
+```{r knn-bias-variance}
+# Plot showing bias-variance tradeoff
+knn_results_plot <- knn_model$results %>%
+  mutate(
+    RMSE_lower = RMSE - RMSESD,
+    RMSE_upper = RMSE + RMSESD
+  )
+
+ggplot(knn_results_plot, aes(x = k)) +
+  geom_ribbon(aes(ymin = RMSE_lower, ymax = RMSE_upper), 
+              fill = "steelblue", alpha = 0.2) +
+  geom_line(aes(y = RMSE), color = "steelblue", size = 1) +
+  geom_point(aes(y = RMSE), color = "steelblue", size = 2) +
+  geom_vline(xintercept = knn_model$bestTune$k, 
+             linetype = "dashed", color = "red") +
+  labs(title = "KNN: RMSE with Confidence Band",
+       subtitle = "Shaded area shows ±1 SD across folds",
+       x = "k (Number of Neighbors)", 
+       y = "RMSE") +
+  theme_minimal()
+```
+
+---
+
+## 6.2 Model 5: Ridge Regression
+
+Ridge regression (L2 regularization) shrinks coefficients toward zero but doesn't set them exactly to zero. It's useful when there's multicollinearity among predictors.
+
+### 6.2.1 Model Training with Hyperparameter Tuning
+
+```{r ridge-model}
+# Define tuning grid for lambda (regularization strength)
+# alpha = 0 for ridge regression
+ridge_grid <- expand.grid(
+  alpha = 0,  # Ridge regression
+  lambda = 10^seq(-4, 2, length = 50)
+)
+
+# Train Ridge model using scaled data
+ridge_model <- train(
+  ph ~ .,
+  data = train_scaled,
+  method = "glmnet",
+  trControl = ctrl_5fold,
+  tuneGrid = ridge_grid,
+  na.action = na.omit
+)
+
+# Model summary
+print(ridge_model)
+
+# Best lambda value
+cat("\nBest lambda:", ridge_model$bestTune$lambda)
+```
+
+### 6.2.2 Hyperparameter Tuning Visualization
+
+```{r ridge-tuning}
+# Plot tuning results
+plot(ridge_model, main = "Ridge Regression: Lambda Tuning (5-Fold CV)")
+
+# Log-scale lambda plot
+ggplot(ridge_model$results, aes(x = log10(lambda), y = RMSE)) +
+  geom_line(color = "darkgreen", size = 1) +
+  geom_point(color = "darkgreen", size = 2) +
+  geom_vline(xintercept = log10(ridge_model$bestTune$lambda), 
+             linetype = "dashed", color = "red") +
+  labs(title = "Ridge Regression: RMSE vs log10(Lambda)",
+       subtitle = paste("Optimal lambda =", round(ridge_model$bestTune$lambda, 6)),
+       x = "log10(Lambda)", y = "RMSE") +
+  theme_minimal()
+```
+
+### 6.2.3 Coefficient Analysis
+
+```{r ridge-coefficients}
+# Extract coefficients at optimal lambda
+ridge_coef <- coef(ridge_model$finalModel, s = ridge_model$bestTune$lambda)
+ridge_coef_df <- data.frame(
+  Variable = rownames(ridge_coef),
+  Coefficient = as.numeric(ridge_coef)
+) %>%
+  filter(Variable != "(Intercept)") %>%
+  arrange(desc(abs(Coefficient)))
+
+# Top 15 coefficients by magnitude
+print("Top 15 Ridge Coefficients (by absolute value):")
+print(head(ridge_coef_df, 15))
+
+# Coefficient plot
+ggplot(head(ridge_coef_df, 15), 
+       aes(x = reorder(Variable, abs(Coefficient)), y = Coefficient)) +
+  geom_bar(stat = "identity", fill = "darkgreen", alpha = 0.7) +
+  coord_flip() +
+  labs(title = "Ridge Regression: Top 15 Coefficients",
+       x = "Variable", y = "Coefficient") +
+  theme_minimal()
+```
+
+### 6.2.4 Coefficient Path
+
+```{r ridge-path}
+# Coefficient path plot
+plot(ridge_model$finalModel, xvar = "lambda", label = TRUE)
+title("Ridge Regression: Coefficient Path")
+```
+
+### 6.2.5 Cross-Validation Performance
+
+```{r ridge-cv-performance}
+# Cross-validation results for best lambda
+ridge_cv_results <- ridge_model$results %>%
+  filter(lambda == ridge_model$bestTune$lambda)
+
+print("Ridge Regression Cross-Validation Results (5-fold):")
+print(ridge_cv_results)
+
+cat("\nRidge Cross-Validation RMSE:", round(ridge_cv_results$RMSE, 4))
+cat("\nRidge Cross-Validation R-squared:", round(ridge_cv_results$Rsquared, 4))
+cat("\nRidge Cross-Validation MAE:", round(ridge_cv_results$MAE, 4))
+```
+
+---
+
+## 6.3 Model 6: Elastic Net Regression
+
+Elastic Net combines L1 (Lasso) and L2 (Ridge) regularization. It can perform feature selection (like Lasso) while handling correlated predictors (like Ridge).
+
+### 6.3.1 Model Training with Hyperparameter Tuning
+
+```{r enet-model}
+# Define tuning grid for alpha and lambda
+# alpha = 0: Ridge, alpha = 1: Lasso, 0 < alpha < 1: Elastic Net
+enet_grid <- expand.grid(
+  alpha = seq(0.1, 0.9, by = 0.1),  # Mix of L1 and L2
+  lambda = 10^seq(-4, 1, length = 30)
+)
+
+# Train Elastic Net model using scaled data
+enet_model <- train(
+  ph ~ .,
+  data = train_scaled,
+  method = "glmnet",
+  trControl = ctrl_5fold,
+  tuneGrid = enet_grid,
+  na.action = na.omit
+)
+
+# Model summary
+print(enet_model)
+
+# Best parameters
+cat("\nBest alpha:", enet_model$bestTune$alpha)
+cat("\nBest lambda:", enet_model$bestTune$lambda)
+```
+
+### 6.3.2 Hyperparameter Tuning Visualization
+
+```{r enet-tuning}
+# Plot tuning results
+plot(enet_model, main = "Elastic Net: Alpha and Lambda Tuning (5-Fold CV)")
+
+# Heatmap of RMSE across alpha and lambda
+enet_results_heatmap <- enet_model$results %>%
+  mutate(log_lambda = log10(lambda))
+
+ggplot(enet_results_heatmap, aes(x = log_lambda, y = factor(alpha), fill = RMSE)) +
+  geom_tile() +
+  scale_fill_viridis_c(option = "plasma") +
+  labs(title = "Elastic Net: RMSE Heatmap",
+       x = "log10(Lambda)", y = "Alpha (L1 Ratio)",
+       fill = "RMSE") +
+  theme_minimal()
+```
+
+### 6.3.3 Coefficient Analysis
+
+```{r enet-coefficients}
+# Extract coefficients at optimal parameters
+enet_coef <- coef(enet_model$finalModel, s = enet_model$bestTune$lambda)
+enet_coef_df <- data.frame(
+  Variable = rownames(enet_coef),
+  Coefficient = as.numeric(enet_coef)
+) %>%
+  filter(Variable != "(Intercept)") %>%
+  arrange(desc(abs(Coefficient)))
+
+# Count non-zero coefficients (feature selection)
+n_nonzero <- sum(enet_coef_df$Coefficient != 0)
+cat("\nNumber of non-zero coefficients:", n_nonzero, "out of", nrow(enet_coef_df))
+
+# Top 15 coefficients by magnitude
+print("\nTop 15 Elastic Net Coefficients (by absolute value):")
+print(head(enet_coef_df, 15))
+
+# Coefficient plot
+ggplot(head(enet_coef_df, 15), 
+       aes(x = reorder(Variable, abs(Coefficient)), y = Coefficient)) +
+  geom_bar(stat = "identity", fill = "purple", alpha = 0.7) +
+  coord_flip() +
+  labs(title = "Elastic Net: Top 15 Coefficients",
+       subtitle = paste("Alpha =", enet_model$bestTune$alpha, 
+                       "| Non-zero features:", n_nonzero),
+       x = "Variable", y = "Coefficient") +
+  theme_minimal()
+```
+
+### 6.3.4 Feature Selection Analysis
+
+```{r enet-feature-selection}
+# Variables with zero coefficients (excluded by elastic net)
+zero_coef_vars <- enet_coef_df %>%
+  filter(Coefficient == 0) %>%
+  pull(Variable)
+
+if(length(zero_coef_vars) > 0) {
+  cat("\nVariables excluded by Elastic Net (coefficient = 0):\n")
+  print(zero_coef_vars)
+} else {
+  cat("\nNo variables were excluded by Elastic Net.\n")
+}
+
+# Variables retained
+retained_vars <- enet_coef_df %>%
+  filter(Coefficient != 0) %>%
+  arrange(desc(abs(Coefficient)))
+
+cat("\nVariables retained (non-zero coefficients):", nrow(retained_vars))
+```
+
+### 6.3.5 Coefficient Path
+
+```{r enet-path}
+# Coefficient path plot at optimal alpha
+plot(enet_model$finalModel, xvar = "lambda", label = TRUE)
+title(paste("Elastic Net: Coefficient Path (alpha =", 
+            enet_model$bestTune$alpha, ")"))
+```
+
+### 6.3.6 Cross-Validation Performance
+
+```{r enet-cv-performance}
+# Cross-validation results for best parameters
+enet_cv_results <- enet_model$results %>%
+  filter(alpha == enet_model$bestTune$alpha,
+         lambda == enet_model$bestTune$lambda)
+
+print("Elastic Net Cross-Validation Results (5-fold):")
+print(enet_cv_results)
+
+cat("\nElastic Net Cross-Validation RMSE:", round(enet_cv_results$RMSE, 4))
+cat("\nElastic Net Cross-Validation R-squared:", round(enet_cv_results$Rsquared, 4))
+cat("\nElastic Net Cross-Validation MAE:", round(enet_cv_results$MAE, 4))
+```
+
+---
+
+# 7. Model Comparison
+
+## 7.1 Cross-Validation Performance Summary
+
+```{r model-comparison}
+# Collect cross-validation results from all 6 models
+model_comparison <- data.frame(
+  Model = c("Multiple Linear Regression", 
+            "Random Forest", 
+            "Gradient Boosted Trees",
+            "k-Nearest Neighbors",
+            "Ridge Regression",
+            "Elastic Net"),
+  CV_Type = c("10-fold (3x)", "10-fold (3x)", "10-fold (3x)",
+              "5-fold", "5-fold", "5-fold"),
+  CV_RMSE = c(
+    mlr_model$results$RMSE,
+    rf_model$results$RMSE[rf_model$results$mtry == rf_model$bestTune$mtry],
+    gbm_cv_results$RMSE,
+    knn_cv_results$RMSE,
+    ridge_cv_results$RMSE,
+    enet_cv_results$RMSE
+  ),
+  CV_Rsquared = c(
+    mlr_model$results$Rsquared,
+    rf_model$results$Rsquared[rf_model$results$mtry == rf_model$bestTune$mtry],
+    gbm_cv_results$Rsquared,
+    knn_cv_results$Rsquared,
+    ridge_cv_results$Rsquared,
+    enet_cv_results$Rsquared
+  ),
+  CV_MAE = c(
+    mlr_model$results$MAE,
+    rf_model$results$MAE[rf_model$results$mtry == rf_model$bestTune$mtry],
+    gbm_cv_results$MAE,
+    knn_cv_results$MAE,
+    ridge_cv_results$MAE,
+    enet_cv_results$MAE
+  )
+)
+
+# Sort by RMSE
+model_comparison <- model_comparison %>% 
+  arrange(CV_RMSE)
+
+print("Model Comparison (Cross-Validation Performance):")
+print(model_comparison)
+
+# Visualization
+model_comparison %>%
+  pivot_longer(c(CV_RMSE, CV_Rsquared, CV_MAE), 
+               names_to = "Metric", values_to = "Value") %>%
+  ggplot(aes(x = reorder(Model, -Value), y = Value, fill = CV_Type)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~Metric, scales = "free_y") +
+  labs(title = "Model Comparison - Cross-Validation Metrics",
+       x = "Model", y = "Value",
+       fill = "CV Type") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+## 7.2 Visual Model Comparison
+
+```{r model-comparison-visual}
+# RMSE comparison
+ggplot(model_comparison, aes(x = reorder(Model, CV_RMSE), y = CV_RMSE, fill = CV_Type)) +
+  geom_bar(stat = "identity", alpha = 0.8) +
+  geom_text(aes(label = round(CV_RMSE, 4)), vjust = -0.5, size = 3) +
+  coord_flip() +
+  labs(title = "Model Comparison: Cross-Validation RMSE",
+       subtitle = "Lower is better",
+       x = "Model", y = "CV RMSE",
+       fill = "CV Type") +
+  theme_minimal()
+
+# R-squared comparison
+ggplot(model_comparison, aes(x = reorder(Model, CV_Rsquared), y = CV_Rsquared, fill = CV_Type)) +
+  geom_bar(stat = "identity", alpha = 0.8) +
+  geom_text(aes(label = round(CV_Rsquared, 4)), vjust = -0.5, size = 3) +
+  coord_flip() +
+  labs(title = "Model Comparison: Cross-Validation R²",
+       subtitle = "Higher is better",
+       x = "Model", y = "CV R²",
+       fill = "CV Type") +
+  theme_minimal()
+```
+
+## 7.3 Model Type Comparison
+
+```{r model-type-comparison}
+# Group models by type
+model_comparison <- model_comparison %>%
+  mutate(
+    Model_Type = case_when(
+      Model %in% c("Multiple Linear Regression", "Ridge Regression", "Elastic Net") ~ "Linear",
+      Model == "k-Nearest Neighbors" ~ "Instance-Based",
+      TRUE ~ "Ensemble"
+    )
+  )
+
+# Summary by model type
+type_summary <- model_comparison %>%
+  group_by(Model_Type) %>%
+  summarise(
+    Avg_RMSE = mean(CV_RMSE),
+    Avg_Rsquared = mean(CV_Rsquared),
+    Best_Model = Model[which.min(CV_RMSE)],
+    .groups = "drop"
+  )
+
+print("Performance by Model Type:")
+print(type_summary)
+```
+
+---
+
+# 8. Test Set Evaluation
+
+## 8.1 Generate Predictions on Test Set
+
+```{r test-predictions}
+# Generate predictions for all models
+# Note: KNN, Ridge, and Elastic Net use scaled data
+test_clean$pred_mlr <- predict(mlr_model, newdata = test_clean)
+test_clean$pred_rf  <- predict(rf_model, newdata = test_clean)
+test_clean$pred_gbm <- predict(gbm_model, newdata = test_clean)
+test_clean$pred_knn <- predict(knn_model, newdata = test_scaled)
+test_clean$pred_ridge <- predict(ridge_model, newdata = test_scaled)
+test_clean$pred_enet <- predict(enet_model, newdata = test_scaled)
+
+# If pH exists in test set, calculate test metrics
+if("ph" %in% names(test_clean) && sum(!is.na(test_clean$ph)) > 0) {
+  
+  test_actual <- test_clean$ph[!is.na(test_clean$ph)]
+  valid_idx <- !is.na(test_clean$ph)
+  
+  test_metrics <- data.frame(
+    Model = c("MLR", "Random Forest", "GBM", "KNN", "Ridge", "Elastic Net"),
+    Test_RMSE = c(
+      rmse(test_actual, test_clean$pred_mlr[valid_idx]),
+      rmse(test_actual, test_clean$pred_rf[valid_idx]),
+      rmse(test_actual, test_clean$pred_gbm[valid_idx]),
+      rmse(test_actual, test_clean$pred_knn[valid_idx]),
+      rmse(test_actual, test_clean$pred_ridge[valid_idx]),
+      rmse(test_actual, test_clean$pred_enet[valid_idx])
+    ),
+    Test_MAE = c(
+      mae(test_actual, test_clean$pred_mlr[valid_idx]),
+      mae(test_actual, test_clean$pred_rf[valid_idx]),
+      mae(test_actual, test_clean$pred_gbm[valid_idx]),
+      mae(test_actual, test_clean$pred_knn[valid_idx]),
+      mae(test_actual, test_clean$pred_ridge[valid_idx]),
+      mae(test_actual, test_clean$pred_enet[valid_idx])
+    ),
+    Test_Rsquared = c(
+      cor(test_actual, test_clean$pred_mlr[valid_idx])^2,
+      cor(test_actual, test_clean$pred_rf[valid_idx])^2,
+      cor(test_actual, test_clean$pred_gbm[valid_idx])^2,
+      cor(test_actual, test_clean$pred_knn[valid_idx])^2,
+      cor(test_actual, test_clean$pred_ridge[valid_idx])^2,
+      cor(test_actual, test_clean$pred_enet[valid_idx])^2
+    )
+  )
+  
+  print("Test Set Performance:")
+  print(test_metrics %>% arrange(Test_RMSE))
+}
+```
+
+## 8.2 Predicted vs Actual Plots
+
+```{r pred-vs-actual}
+# If we have actual pH values in test set
+if("ph" %in% names(test_clean) && sum(!is.na(test_clean$ph)) > 0) {
+  
+  plot_data <- test_clean %>%
+    filter(!is.na(ph)) %>%
+    select(ph, pred_mlr, pred_rf, pred_gbm, pred_knn, pred_ridge, pred_enet) %>%
+    pivot_longer(-ph, names_to = "Model", values_to = "Predicted") %>%
+    mutate(Model = case_when(
+      Model == "pred_mlr" ~ "MLR",
+      Model == "pred_rf" ~ "Random Forest",
+      Model == "pred_gbm" ~ "GBM",
+      Model == "pred_knn" ~ "KNN",
+      Model == "pred_ridge" ~ "Ridge",
+      Model == "pred_enet" ~ "Elastic Net"
+    ))
+  
+  ggplot(plot_data, aes(x = ph, y = Predicted)) +
+    geom_point(alpha = 0.5, color = "steelblue") +
+    geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed") +
+    facet_wrap(~Model, ncol = 3) +
+    labs(title = "Predicted vs Actual pH - All Models",
+         x = "Actual pH", y = "Predicted pH") +
+    theme_minimal()
+}
+```
+
+## 8.3 Residual Analysis
+
+```{r residual-analysis}
+if("ph" %in% names(test_clean) && sum(!is.na(test_clean$ph)) > 0) {
+  
+  residual_data <- test_clean %>%
+    filter(!is.na(ph)) %>%
+    mutate(
+      resid_mlr = ph - pred_mlr,
+      resid_rf = ph - pred_rf,
+      resid_gbm = ph - pred_gbm,
+      resid_knn = ph - pred_knn,
+      resid_ridge = ph - pred_ridge,
+      resid_enet = ph - pred_enet
+    ) %>%
+    select(starts_with("resid_")) %>%
+    pivot_longer(everything(), names_to = "Model", values_to = "Residual") %>%
+    mutate(Model = gsub("resid_", "", Model) %>% toupper())
+  
+  ggplot(residual_data, aes(x = Model, y = Residual, fill = Model)) +
+    geom_boxplot(alpha = 0.7) +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+    labs(title = "Residual Distribution by Model",
+         subtitle = "Centered at zero indicates unbiased predictions",
+         x = "Model", y = "Residual (Actual - Predicted)") +
+    theme_minimal() +
+    theme(legend.position = "none")
+}
+```
+
+---
+
+# 9. Final Model Selection and Predictions
+
+## 9.1 Model Selection
+
+```{r model-selection}
+# Select best model based on CV RMSE (lowest is best)
+best_model_name <- model_comparison$Model[1]
+cat("Selected Model:", best_model_name)
+cat("\nReason: Lowest cross-validation RMSE")
+
+# Get the corresponding model object
+best_model <- switch(best_model_name,
+  "Multiple Linear Regression" = mlr_model,
+  "Random Forest" = rf_model,
+  "Gradient Boosted Trees" = gbm_model,
+  "k-Nearest Neighbors" = knn_model,
+  "Ridge Regression" = ridge_model,
+  "Elastic Net" = enet_model
+)
+
+# Determine if best model needs scaled data
+needs_scaled <- best_model_name %in% c("k-Nearest Neighbors", "Ridge Regression", "Elastic Net")
+```
+
+## 9.2 Generate Final Predictions
+
+```{r final-predictions}
+# Generate final predictions using best model
+if(needs_scaled) {
+  test_clean$PH <- predict(best_model, newdata = test_scaled)
+} else {
+  test_clean$PH <- predict(best_model, newdata = test_clean)
+}
+
+# Summary of predictions
+cat("\nSummary of Predicted pH Values:\n")
+summary(test_clean$PH)
+
+# Distribution of predictions
+ggplot(test_clean, aes(x = PH)) +
+  geom_histogram(bins = 30, fill = "steelblue", color = "white", alpha = 0.7) +
+  labs(title = paste("Distribution of Predicted pH -", best_model_name),
+       x = "Predicted pH", y = "Count") +
+  theme_minimal()
+```
+
+## 9.3 Export Predictions
+
+```{r export-predictions}
+# Create output dataframe with all predictions
+output_predictions <- test_clean %>%
+  select(any_of(c("brand_code", "PH")), 
+         pred_mlr, pred_rf, pred_gbm, pred_knn, pred_ridge, pred_enet)
+
+# Rename for clarity
+names(output_predictions) <- gsub("pred_", "pH_", names(output_predictions))
+
+# Export to Excel
+write_xlsx(output_predictions, "pH_predictions_all_models.xlsx")
+
+# Also export to CSV
+write.csv(output_predictions, "pH_predictions_all_models.csv", row.names = FALSE)
+
+cat("\nPredictions exported to 'pH_predictions_all_models.xlsx' and 'pH_predictions_all_models.csv'")
+```
+
+---
+
+# 10. Summary and Conclusions
+
+## 10.1 Key Findings
+
+```{r summary}
+# Print final summary
+cat("="  %>% rep(70) %>% paste(collapse = ""))
+cat("\n                       MODEL SUMMARY REPORT\n")
+cat("="  %>% rep(70) %>% paste(collapse = ""))
+
+cat("\n\n1. MODELS EVALUATED:\n")
+cat("   10-Fold CV (3 repeats):\n")
+cat("     - Multiple Linear Regression (baseline)\n")
+cat("     - Random Forest (ensemble method)\n")
+cat("     - Gradient Boosted Trees (sequential ensemble)\n")
+cat("   5-Fold CV:\n")
+cat("     - k-Nearest Neighbors (instance-based learning)\n")
+cat("     - Ridge Regression (L2 regularization)\n")
+cat("     - Elastic Net (L1 + L2 regularization)\n")
+
+cat("\n2. CROSS-VALIDATION PERFORMANCE (sorted by RMSE):\n")
+for(i in 1:nrow(model_comparison)) {
+  cat(sprintf("   %d. %s (%s):\n", i, model_comparison$Model[i], model_comparison$CV_Type[i]))
+  cat(sprintf("      RMSE: %.4f | R²: %.4f | MAE: %.4f\n",
+              model_comparison$CV_RMSE[i],
+              model_comparison$CV_Rsquared[i],
+              model_comparison$CV_MAE[i]))
+}
+
+cat("\n3. SELECTED MODEL:", best_model_name, "\n")
+cat("   Reason: Lowest cross-validation RMSE\n")
+
+cat("\n4. MODEL-SPECIFIC INSIGHTS:\n")
+cat("   - KNN optimal k:", knn_model$bestTune$k, "\n")
+cat("   - Ridge optimal lambda:", round(ridge_model$bestTune$lambda, 6), "\n")
+cat("   - Elastic Net optimal alpha:", enet_model$bestTune$alpha, "\n")
+cat("   - Elastic Net optimal lambda:", round(enet_model$bestTune$lambda, 6), "\n")
+cat("   - Random Forest optimal mtry:", rf_model$bestTune$mtry, "\n")
+```
+
+## 10.2 Model Comparison Summary Table
+
+```{r summary-table}
+# Create comprehensive summary table
+summary_table <- model_comparison %>%
+  select(Model, CV_Type, CV_RMSE, CV_Rsquared, CV_MAE) %>%
+  mutate(
+    Rank = row_number(),
+    CV_RMSE = round(CV_RMSE, 4),
+    CV_Rsquared = round(CV_Rsquared, 4),
+    CV_MAE = round(CV_MAE, 4)
+  ) %>%
+  select(Rank, everything())
+
+knitr::kable(summary_table, 
+             caption = "Model Performance Summary",
+             col.names = c("Rank", "Model", "CV Type", "RMSE", "R²", "MAE"))
+```
+
+## 10.3 Recommendations
+
+Based on our analysis:
+
+1. **Model Performance**: The selected model (`r best_model_name`) demonstrates the best balance of predictive accuracy across cross-validation folds.
+
+2. **Linear vs Non-Linear Models**: 
+   - If interpretability is crucial, consider Ridge or Elastic Net regression
+   - If prediction accuracy is paramount, ensemble methods (RF, GBM) typically perform best
+
+3. **Feature Selection**: Elastic Net identified `r sum(enet_coef_df$Coefficient != 0)` important features out of `r nrow(enet_coef_df)` total predictors.
+
+4. **Implementation Considerations**:
+   - KNN requires storing all training data for predictions
+   - Regularized models (Ridge, Elastic Net) require feature scaling
+   - Ensemble methods provide robust predictions but are less interpretable
+
+5. **Future Work**:
+   - Consider feature engineering based on domain knowledge
+   - Explore interaction terms for linear models
+   - Implement real-time monitoring dashboards
+   - Conduct sensitivity analysis on key predictors
+
+---
+
+# Appendix
+
+## A. Session Information
+
+```{r session-info}
+sessionInfo()
+```
+
+## B. Hyperparameter Summary
+
+```{r hyperparameter-summary}
+# Summary of all tuned hyperparameters
+hyperparam_summary <- data.frame(
+  Model = c("Random Forest", "GBM", "KNN", "Ridge", "Elastic Net"),
+  Parameter = c("mtry", "n.trees, depth, shrinkage", "k", "lambda", "alpha, lambda"),
+  Optimal_Value = c(
+    as.character(rf_model$bestTune$mtry),
+    paste(gbm_model$bestTune$n.trees, gbm_model$bestTune$interaction.depth, 
+          gbm_model$bestTune$shrinkage, sep = ", "),
+    as.character(knn_model$bestTune$k),
+    as.character(round(ridge_model$bestTune$lambda, 6)),
+    paste(enet_model$bestTune$alpha, round(enet_model$bestTune$lambda, 6), sep = ", ")
+  )
+)
+
+knitr::kable(hyperparam_summary, 
+             caption = "Optimal Hyperparameters by Model",
+             col.names = c("Model", "Tuned Parameters", "Optimal Values"))
+```
+
+## C. Model Specifications
+
+### Multiple Linear Regression
+- Method: Ordinary Least Squares (OLS)
+- Cross-validation: 10-fold, repeated 3 times
+- Feature selection: All predictors included
+
+### Random Forest
+- Number of trees: 500
+- Tuned parameter: mtry (variables per split)
+- Cross-validation: 10-fold, repeated 3 times
+
+### Gradient Boosted Trees
+- Distribution: Gaussian (regression)
+- Tuned parameters: n.trees, interaction.depth, shrinkage
+- Cross-validation: 10-fold, repeated 3 times
+
+### k-Nearest Neighbors
+- Distance metric: Euclidean
+- Tuned parameter: k (number of neighbors)
+- Cross-validation: 5-fold
+- Preprocessing: Feature scaling (center + scale)
+
+### Ridge Regression
+- Regularization: L2 (alpha = 0)
+- Tuned parameter: lambda
+- Cross-validation: 5-fold
+- Preprocessing: Feature scaling (center + scale)
+
+### Elastic Net
+- Regularization: L1 + L2 (0 < alpha < 1)
+- Tuned parameters: alpha (L1 ratio), lambda
+- Cross-validation: 5-fold
+- Preprocessing: Feature scaling (center + scale)
